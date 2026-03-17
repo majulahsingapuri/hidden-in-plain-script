@@ -1,0 +1,3 @@
+google-transliteration-api==1.0.3
+nnsight
+plotly
