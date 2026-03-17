@@ -197,10 +197,9 @@ total_results =[]
 all_prompts = jailbreak_dataset()
 for i, prompt_data in enumerate(all_prompts):
     pid = prompt_data["prompt_id"]
-
     print(f"[{i+1}/{len(all_prompts)}] {pid}: {prompt_data['goal'][:60]}...")
 
-    response = generate_response(prompt_data["goal"])
+    response = generate_response(prompt_data[PROMPT_LANGUAGE])
     verdict = judge_response(prompt_data["goal"], response)
     print(f"  -> refused={verdict['refused']}, harmful={verdict['harmful']}: {verdict['reason'][:60]}")
 

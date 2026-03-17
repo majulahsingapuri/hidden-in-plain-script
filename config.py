@@ -8,3 +8,4 @@ linmit = 7 # Limit number of examples
 TEMPERATURE_local_config = 0.9
 DEVICE_local="mps"
 TOP_P_local_config=0
+PROMPT_LANGUAGE = "english"

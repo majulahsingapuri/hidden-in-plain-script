@@ -86,6 +86,7 @@ def process_prompts(prompts):
         tegu = process_sentences([x['goal']], OUTPUT_PATH)[0]
         x['gujarati'] = tegu['gujarati']
         x['telugu'] = tegu['telugu']
+        x['english'] = tegu['english']
     return prompts
 
 
