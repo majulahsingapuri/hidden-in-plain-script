@@ -1,11 +1,13 @@
-# Config
-GEMMA_MODEL = "google/gemma-3-4b-it"
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Literal
 
-JUDGE_API_BASE = "http://127.0.0.1:1234/v1"
-JUDGE_API_KEY = "not-needed"
-JUDGE_MODEL_NAME = "gpt-OSS"
-linmit = 7 # Limit number of examples
-TEMPERATURE_local_config = 0.9
-DEVICE_local="mps"
-TOP_P_local_config=0
-PROMPT_LANGUAGE = "english"
+
+class Config(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    model: str = "google/gemma-3-4b-it"
+    hf_token: str
+    judge_provider: Literal["openai", "anthropic", "ollama"] = "ollama"
+    judge_model_name: str = "gpt-oss:20b"
+    temperature: float = 0.9
+    top_p: int = 0
