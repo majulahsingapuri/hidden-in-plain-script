@@ -87,7 +87,7 @@ def main():
         help="Target language codes (e.g., gu te).",
     )
     args = parser.parse_args()
-    run_experiment(args.data, args.limit)
+    run_experiment(args.data, args.langs, args.limit)
 
 
 if __name__ == "__main__":
