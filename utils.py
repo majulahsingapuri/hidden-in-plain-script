@@ -12,9 +12,9 @@ def generate_response(
         prompt_text,
         max_new_tokens=max_new_tokens,
     ):
-        resp = model.tokenizer.decode(model.generator.output[0])
+        output = model.generator.output.save()
 
-    return resp
+    return model.tokenizer.decode(output[0])
 
 
 def generate_trace(model: LanguageModel, prompt_text: str):

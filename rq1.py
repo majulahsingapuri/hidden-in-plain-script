@@ -41,8 +41,8 @@ def run_experiment(data_path: Path, langs: list[str], limit: int = 5):
         version for lang in langs for version in [lang, f"{lang}_en", f"en_{lang}"]
     ]
 
-    for prompt in tqdm(prompts):
-        for variant in variants:
+    for prompt in tqdm(prompts, position=0):
+        for variant in tqdm(variants, position=1, leave=False):
             response = generate_response(
                 model,
                 prompt[variant],
