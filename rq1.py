@@ -46,8 +46,6 @@ def run_experiment(data_path: Path, langs: list[str], limit: int = 5):
             response = generate_response(
                 model,
                 prompt[variant],
-                # temperature=config.temperature,
-                # top_p=config.top_p,
             )
             verdict = judge_response(judge, prompt["en"], response)
 

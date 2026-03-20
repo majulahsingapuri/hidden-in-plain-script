@@ -6,15 +6,11 @@ def generate_response(
     model: LanguageModel,
     prompt_text: str,
     max_new_tokens: int = 300,
-    temperature: float = 0.9,
-    top_p: int = 0,
 ):
     """Run a single prompt through Gemma and return the generated text."""
     with model.generate(
         prompt_text,
         max_new_tokens=max_new_tokens,
-        temperature=temperature,
-        top_p_threshold=top_p,
     ):
         resp = model.tokenizer.decode(model.generator.output[0])
 
