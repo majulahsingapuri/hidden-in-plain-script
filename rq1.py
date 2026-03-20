@@ -60,7 +60,7 @@ def run_experiment(data_path: Path, langs: list[str], limit: int = 5):
             total_results.append(result)
 
     with open(
-        f"results/{config.model}-{config.judge_model_name}-{config.temperature}"
+        f"./results/{config.model.replace("/", "-")}-{config.judge_model_name}-{config.temperature}"
         + f"-{config.top_p}-{datetime.now().isoformat()}.json",
         "w",
     ) as f:
