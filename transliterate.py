@@ -1,49 +1,66 @@
 import json
 import argparse
+import asyncio
+import time
 from pathlib import Path
 from typing import Literal, Optional, Union
-from google.transliteration import transliterate_word
+from google.transliteration import transliterate_text
+from googletrans import Translator
+from pydantic_ai import Agent
+from unidecode import unidecode
+import requests
+from tqdm import tqdm
 
 # Set by CLI when using --method llm
 LLM_PROVIDER = None
 LLM_MODEL = None
 
 
-def _llm_transliterate(prompt: str) -> str:
-    """Call the chosen LLM provider and return the generated text."""
+async def _translate_many_googletrans_async(
+    sentences: list[str], lang_codes: list[str]
+) -> dict[str, list]:
+    translator = Translator()
+    try:
+        results: dict[str, list] = {}
+        for lang_code in lang_codes:
+            if not sentences:
+                results[lang_code] = []
+                continue
+            translated = translator.translate(sentences, dest=lang_code, src="en")
+            if asyncio.iscoroutine(translated):
+                translated = await translated
+            if not isinstance(translated, list):
+                translated = [translated]
+            results[lang_code] = translated
+        return results
+    finally:
+        client = getattr(translator, "client", None)
+        aclose = getattr(client, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
-    if LLM_PROVIDER == "openai":
+
+def _translate_many_googletrans(
+    sentences: list[str], lang_codes: list[str]
+) -> dict[str, list]:
+    return asyncio.run(_translate_many_googletrans_async(sentences, lang_codes))
+
+
+def _transliterate_with_retry(
+    sentence: str, lang_code: str, attempts: int = 3, backoff_s: float = 0.5
+) -> str:
+    last_err: Exception | None = None
+    for i in range(attempts):
         try:
-            import openai
-        except ImportError as e:
-            raise ImportError(
-                "openai package not installed. Install it with 'pip install openai' to use --provider openai."
-            ) from e
-
-        resp = openai.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-        )
-        return resp.choices[0].message.content.strip()
-
-    if LLM_PROVIDER == "anthropic":
-        try:
-            from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
-        except ImportError as e:
-            raise ImportError(
-                "anthropic package not installed. Install it with 'pip install anthropic' to use --provider anthropic."
-            ) from e
-
-        client = Anthropic()
-        resp = client.completions.create(
-            model=LLM_MODEL,
-            prompt=f"{HUMAN_PROMPT}{prompt}{AI_PROMPT}",
-            max_tokens_to_sample=1024,
-        )
-        return resp.completion.strip()
-
-    raise ValueError(f"Unsupported LLM provider: {LLM_PROVIDER}")
+            return transliterate_text(sentence, lang_code)
+        except requests.exceptions.RequestException as e:
+            last_err = e
+            if i < attempts - 1:
+                time.sleep(backoff_s * (2**i))
+    print(
+        f"[WARN] Transliteration failed for lang={lang_code}; using original text. Error: {last_err}"
+    )
+    return sentence
 
 
 def transliterate_sentence(
@@ -51,21 +68,17 @@ def transliterate_sentence(
 ) -> str:
     """Transliterate each word in a sentence to the target language."""
     if method == "transliterator":
-        return " ".join(
-            [
-                (result[0] if (result := transliterate_word(word, lang_code)) else word)
-                for word in sentence.split()
-            ]
-        )
+        return _transliterate_with_retry(sentence, lang_code)
     elif method == "llm":
         # Prompt used to ask the LLM for a transliteration.
-        prompt = (
-            "Transliterate the following English sentence into {lang_code} script. "
-            "Keep punctuation and spacing exactly as in the input, and output only the transliteration.\n"
-            "Sentence: {sentence}\n"
-        ).format(lang_code=lang_code, sentence=sentence)
-
-        return _llm_transliterate(prompt)
+        system_prompt = (
+            "Transliterate the following sentence into {lang_code} script. "
+            "Keep punctuation and spacing exactly as in the input, and output only the transliteration."
+        ).format(lang_code=lang_code)
+        translator_ai = Agent(
+            f"{LLM_PROVIDER}:{LLM_MODEL}", system_prompt=system_prompt
+        )
+        return translator_ai.run_sync(f"Sentence:{sentence}").output
     else:
         raise ValueError("Invalid transliteration method")
 
@@ -105,28 +118,38 @@ def process_sentences(
 
     results = []
     new_count = 0
+    pending_sentences: list[str] = []
+    pending_entries: list[dict] = []
 
-    for sentence in sentences:
+    for sentence in tqdm(sentences, position=0):
         data = None
         if isinstance(sentence, dict):
             data = sentence.copy()
             sentence = sentence["en"]
         if cache and sentence in cache and set(lang_codes) <= cache[sentence].keys():
-            print(f"[CACHE]  {sentence}")
             results.append(cache[sentence])
         else:
-            print(f"[NEW]    {sentence}")
             entry = {
                 "en": sentence,
             } | {
-                lang_code: transliterate_sentence(sentence, lang_code, method)
+                f"en_{lang_code}": transliterate_sentence(sentence, lang_code, method)
                 for lang_code in lang_codes
             }
             if data:
                 entry |= data
             results.append(entry)
             cache[sentence] = entry
+            pending_sentences.append(sentence)
+            pending_entries.append(entry)
             new_count += 1
+
+    if pending_sentences:
+        translated_by_lang = _translate_many_googletrans(pending_sentences, lang_codes)
+        for i, entry in enumerate(pending_entries, position=0):
+            for lang_code in lang_codes:
+                translated = translated_by_lang[lang_code][i]
+                entry[lang_code] = translated.text
+                entry[f"{lang_code}_en"] = unidecode(translated.pronunciation)
 
     # Save only if there were new transliterations
     if path:

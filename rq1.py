@@ -37,19 +37,23 @@ def run_experiment(data_path: Path, langs: list[str], limit: int = 5):
     if limit:
         prompts = prompts[:limit]
 
+    variants = ["en"] + [
+        version for lang in langs for version in [lang, f"{lang}_en", f"en_{lang}"]
+    ]
+
     for prompt in tqdm(prompts):
-        for lang_code in langs:
+        for variant in variants:
             response = generate_response(
                 model,
-                prompt[lang_code],
-                temperature=config.temperature,
-                top_p=config.top_p,
+                prompt[variant],
+                # temperature=config.temperature,
+                # top_p=config.top_p,
             )
             verdict = judge_response(judge, prompt["en"], response)
 
             result = {
-                "variant": lang_code,
-                "prompt": prompt[lang_code],
+                "variant": variant,
+                "prompt": prompt[variant],
                 "response": response,
                 "judge_refused": verdict.refused,
                 "judge_harmful": verdict.harmful,
