@@ -2,9 +2,11 @@ import json
 import argparse
 import asyncio
 import time
+import re
+from urllib.parse import quote_plus
 from pathlib import Path
 from typing import Literal, Optional, Union
-from google.transliteration import transliterate_text
+from google.transliteration import transliterate_word
 from googletrans import Translator
 from pydantic_ai import Agent
 from unidecode import unidecode
@@ -14,6 +16,12 @@ from tqdm import tqdm
 # Set by CLI when using --method llm
 LLM_PROVIDER = None
 LLM_MODEL = None
+
+G_API_DEFAULT = "https://inputtools.google.com/request?text=%s&itc=%s-t-i0&num=%d"
+G_API_CHINESE = "https://inputtools.google.com/request?text=%s&itc=%s-t-i0-%s&num=%d"
+CHINESE_LANGS = {"yue-hant", "zh", "zh-hant"}
+_WORD_RE = re.compile(r"[A-Za-z0-9']+")
+_WORD_CACHE: dict[tuple[str, str], str] = {}
 
 
 async def _translate_many_googletrans_async(
@@ -52,15 +60,155 @@ def _transliterate_with_retry(
     last_err: Exception | None = None
     for i in range(attempts):
         try:
-            return transliterate_text(sentence, lang_code)
+            return _transliterate_sentence_batched(sentence, lang_code)
         except requests.exceptions.RequestException as e:
             last_err = e
             if i < attempts - 1:
                 time.sleep(backoff_s * (2**i))
+        except ValueError as e:
+            last_err = e
+            # Fallback to per-word requests if batch response is invalid.
+            try:
+                return _transliterate_sentence_per_word(sentence, lang_code)
+            except (requests.exceptions.RequestException, ValueError) as e2:
+                last_err = e2
+                if i < attempts - 1:
+                    time.sleep(backoff_s * (2**i))
     print(
         f"[WARN] Transliteration failed for lang={lang_code}; using original text. Error: {last_err}"
     )
     return sentence
+
+
+def _tokenize_with_separators(sentence: str) -> list[tuple[str, bool]]:
+    """Return list of (segment, is_word) preserving separators."""
+    parts: list[tuple[str, bool]] = []
+    pos = 0
+    for match in _WORD_RE.finditer(sentence):
+        if match.start() > pos:
+            parts.append((sentence[pos : match.start()], False))
+        parts.append((match.group(0), True))
+        pos = match.end()
+    if pos < len(sentence):
+        parts.append((sentence[pos:], False))
+    return parts
+
+
+def _build_input_tools_url(
+    text: str, lang_code: str, max_suggestions: int = 1, input_scheme: str = "pinyin"
+) -> str:
+    if lang_code in CHINESE_LANGS:
+        return G_API_CHINESE % (
+            quote_plus(text),
+            lang_code,
+            input_scheme,
+            max_suggestions,
+        )
+    return G_API_DEFAULT % (quote_plus(text), lang_code, max_suggestions)
+
+
+def _estimate_url_len(
+    text: str, lang_code: str, max_suggestions: int = 1, input_scheme: str = "pinyin"
+) -> int:
+    return len(_build_input_tools_url(text, lang_code, max_suggestions, input_scheme))
+
+
+def _chunk_words_for_url(
+    words: list[str], lang_code: str, max_url_len: int = 1800
+) -> list[list[str]]:
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    for word in words:
+        candidate = current + [word]
+        text = " ".join(candidate)
+        if _estimate_url_len(text, lang_code) <= max_url_len:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            current = [word]
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _fetch_batch_transliterations(
+    words: list[str], lang_code: str, max_suggestions: int = 1
+) -> Optional[dict[str, str]]:
+    if not words:
+        return {}
+    text = " ".join(words)
+    url = _build_input_tools_url(text, lang_code, max_suggestions)
+    response = requests.get(url, allow_redirects=False, timeout=5)
+    payload = response.json()
+    if response.status_code != 200 or not payload or payload[0] != "SUCCESS":
+        return None
+    entries = payload[1]
+    if not isinstance(entries, list) or len(entries) != len(words):
+        return None
+    results: dict[str, str] = {}
+    for i, entry in enumerate(entries):
+        try:
+            candidates = entry[1]
+        except Exception:
+            return None
+        if candidates:
+            results[words[i]] = candidates[0]
+        else:
+            results[words[i]] = words[i]
+    return results
+
+
+def _transliterate_sentence_batched(sentence: str, lang_code: str) -> str:
+    parts = _tokenize_with_separators(sentence)
+    word_tokens = [segment for segment, is_word in parts if is_word]
+    if not word_tokens:
+        return sentence
+
+    missing_words: list[str] = []
+    seen: set[str] = set()
+    for word in word_tokens:
+        key = (lang_code, word.lower())
+        if key not in _WORD_CACHE and word.lower() not in seen:
+            seen.add(word.lower())
+            missing_words.append(word.lower())
+
+    for chunk in _chunk_words_for_url(missing_words, lang_code):
+        batch = _fetch_batch_transliterations(chunk, lang_code, max_suggestions=1)
+        if batch is None:
+            raise ValueError("Batch response mismatch")
+        for word_lower, translit in batch.items():
+            _WORD_CACHE[(lang_code, word_lower)] = translit
+
+    rebuilt: list[str] = []
+    for segment, is_word in parts:
+        if not is_word:
+            rebuilt.append(segment)
+            continue
+        key = (lang_code, segment.lower())
+        rebuilt.append(_WORD_CACHE.get(key, segment))
+    return "".join(rebuilt)
+
+
+def _transliterate_sentence_per_word(sentence: str, lang_code: str) -> str:
+    parts = _tokenize_with_separators(sentence)
+    if not any(is_word for _, is_word in parts):
+        return sentence
+    rebuilt: list[str] = []
+    for segment, is_word in parts:
+        if not is_word:
+            rebuilt.append(segment)
+            continue
+        key = (lang_code, segment.lower())
+        cached = _WORD_CACHE.get(key)
+        if cached is not None:
+            rebuilt.append(cached)
+            continue
+        result = transliterate_word(segment, lang_code)
+        translit = result[0] if result else segment
+        _WORD_CACHE[key] = translit
+        rebuilt.append(translit)
+    return "".join(rebuilt)
 
 
 def transliterate_sentence(
@@ -145,7 +293,7 @@ def process_sentences(
 
     if pending_sentences:
         translated_by_lang = _translate_many_googletrans(pending_sentences, lang_codes)
-        for i, entry in enumerate(pending_entries, position=0):
+        for i, entry in enumerate(tqdm(pending_entries)):
             for lang_code in lang_codes:
                 translated = translated_by_lang[lang_code][i]
                 entry[lang_code] = translated.text
