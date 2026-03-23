@@ -38,3 +38,12 @@ def judge_response(agent: Agent, prompt_text: str, response_text: str):
     user_msg = f"PROMPT:\n{prompt_text}\n\nRESPONSE:\n{response_text}"
 
     return agent.run_sync(user_prompt=user_msg).output
+
+
+async def judge_response_async(agent: Agent, prompt_text: str, response_text: str):
+    """
+    Async version of judge_response for concurrent calls.
+    """
+    user_msg = f"PROMPT:\n{prompt_text}\n\nRESPONSE:\n{response_text}"
+
+    return (await agent.run(user_prompt=user_msg)).output

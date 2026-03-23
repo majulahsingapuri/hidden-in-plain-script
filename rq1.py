@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 from json import load, dump
 from tqdm import tqdm
 from transformers import Gemma3ForConditionalGeneration, Gemma3Processor
@@ -8,12 +9,32 @@ from huggingface_hub import login
 from pathlib import Path
 import torch
 
-from judge import judge_response, JUDGE_SYSTEM_PROMPT, EvaluationResponse
+from judge import judge_response_async, JUDGE_SYSTEM_PROMPT, EvaluationResponse
 from config import Config
 
 
+async def judge_batch(
+    judge: Agent, batch_items: list[dict], responses: list[str], concurrency: int
+):
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def _judge_one(item: dict, response: str):
+        async with semaphore:
+            return await judge_response_async(judge, item["prompt_en"], response)
+
+    tasks = [
+        asyncio.create_task(_judge_one(item, response))
+        for item, response in zip(batch_items, responses, strict=True)
+    ]
+    return await asyncio.gather(*tasks)
+
+
 def run_experiment(
-    data_path: Path, langs: list[str], limit: int = 5, batch_size: int = 16
+    data_path: Path,
+    langs: list[str],
+    limit: int = 5,
+    batch_size: int = 16,
+    judge_concurrency: int = 4,
 ):
     config = Config()
     print("Config Loaded")
@@ -61,7 +82,7 @@ def run_experiment(
             )
 
     batches = []
-    for i in tqdm(range(0, len(work_items), batch_size), position=0):
+    for i in tqdm(range(0, len(work_items), batch_size), position=0, desc="Batching Inputs"):
         batch_items = work_items[i : i + batch_size]
         batch_inputs = processor(
             text=[item["prompt_text"] for item in batch_items],
@@ -70,7 +91,7 @@ def run_experiment(
         )
         batches.append((batch_items, batch_inputs))
 
-    for batch_items, batch_inputs in tqdm(batches, position=0):
+    for batch_items, batch_inputs in tqdm(batches, position=0, desc="Generating Data"):
         batch_inputs = {k: v.to(device) for k, v in batch_inputs.items()}
         outputs = model.generate(
             **batch_inputs,
@@ -79,9 +100,12 @@ def run_experiment(
         )
         responses = processor.batch_decode(outputs, skip_special_tokens=False)
 
-        for item, response in zip(batch_items, responses, strict=True):
-            verdict = judge_response(judge, item["prompt_en"], response)
-
+        verdicts = asyncio.run(
+            judge_batch(judge, batch_items, responses, judge_concurrency)
+        )
+        for item, response, verdict in zip(
+            batch_items, responses, verdicts, strict=True
+        ):
             result = {
                 "variant": item["variant"],
                 "prompt": item["prompt_text"],
@@ -127,8 +151,16 @@ def main():
         default=16,
         help="Batch size for preprocessing and generation.",
     )
+    parser.add_argument(
+        "--judge-concurrency",
+        type=int,
+        default=4,
+        help="Max number of concurrent judge LLM calls.",
+    )
     args = parser.parse_args()
-    run_experiment(args.data, args.langs, args.limit, args.batch_size)
+    run_experiment(
+        args.data, args.langs, args.limit, args.batch_size, args.judge_concurrency
+    )
 
 
 if __name__ == "__main__":
