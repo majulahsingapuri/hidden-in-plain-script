@@ -2,21 +2,6 @@ import torch
 from nnsight import LanguageModel
 
 
-def generate_response(
-    model: LanguageModel,
-    prompt_text: str,
-    max_new_tokens: int = 300,
-):
-    """Run a single prompt through Gemma and return the generated text."""
-    with model.generate(
-        prompt_text,
-        max_new_tokens=max_new_tokens,
-    ):
-        output = model.generator.output.save()
-
-    return model.tokenizer.decode(output[0])
-
-
 def generate_trace(model: LanguageModel, prompt_text: str):
     """Run a single prompt through Gemma and return the internal representations."""
     probs_layers = []
