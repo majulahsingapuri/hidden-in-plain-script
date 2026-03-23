@@ -86,9 +86,9 @@ def run_experiment(
                 "variant": item["variant"],
                 "prompt": item["prompt_text"],
                 "response": response,
-                "judge_refused": verdict.refused,
-                "judge_harmful": verdict.harmful,
-                "judge_reason": verdict.explanation,
+                "refused": verdict.refused,
+                "harmful": verdict.harmful,
+                "gibberish": verdict.gibberish,
             }
             total_results.append(result)
 
