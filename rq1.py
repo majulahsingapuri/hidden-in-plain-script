@@ -86,7 +86,7 @@ def run_experiment(
         batch_items = work_items[i : i + batch_size]
         batch_inputs = processor(
             text=[item["prompt_text"] for item in batch_items],
-            padding=False,
+            padding=True,
             return_tensors="pt",
         )
         batches.append((batch_items, batch_inputs))
@@ -98,7 +98,7 @@ def run_experiment(
             max_new_tokens=300,
             do_sample=False,
         )
-        responses = processor.batch_decode(outputs, skip_special_tokens=False)
+        responses = processor.batch_decode(outputs, skip_special_tokens=True)
 
         verdicts = asyncio.run(
             judge_batch(judge, batch_items, responses, judge_concurrency)
