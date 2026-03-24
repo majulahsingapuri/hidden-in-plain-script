@@ -86,7 +86,7 @@ def run_experiment(
         batch_items = work_items[i : i + batch_size]
         batch_inputs = processor(
             text=[item["prompt_text"] for item in batch_items],
-            padding=True,
+            padding=False,
             return_tensors="pt",
         )
         batches.append((batch_items, batch_inputs))
@@ -95,7 +95,7 @@ def run_experiment(
         batch_inputs = {k: v.to(device) for k, v in batch_inputs.items()}
         outputs = model.generate(
             **batch_inputs,
-            max_new_tokens=100,
+            max_new_tokens=300,
             do_sample=False,
         )
         responses = processor.batch_decode(outputs, skip_special_tokens=False)
