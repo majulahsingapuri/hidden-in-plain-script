@@ -121,7 +121,7 @@ def run_experiment(
         + f"-{config.judge_model_name}"
         + f"-{datetime.now().isoformat()}.json"
     )
-    save_path.mkdir(parents=True, exist_ok=True)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(
         save_path,

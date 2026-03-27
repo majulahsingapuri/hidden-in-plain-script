@@ -72,7 +72,7 @@ def run_experiment(
         f"./results/rq2/{config.model.replace("/", "-")}"
         + f"-{datetime.now().isoformat()}.json" 
     )
-    save_path.mkdir(parents=True, exist_ok=True)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(
         save_path,
