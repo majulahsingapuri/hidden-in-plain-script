@@ -45,6 +45,8 @@ ipython
 jedi
 jinja2
 jiter
+langcodes
+language-data
 logfire-api
 markdown-it-py
 markupsafe

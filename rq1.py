@@ -116,9 +116,14 @@ def run_experiment(
             }
             total_results.append(result)
 
+    save_path = Path( 
+        f"./results/rq1/{config.model.replace("/", "-")}"
+        + f"-{config.judge_model_name}-{config.temperature}"
+        + f"-{config.top_p}-{datetime.now().isoformat()}.json"
+    ).mkdir(parents=True, exist_ok=True)
+    
     with open(
-        f"./results/{config.model.replace("/", "-")}-{config.judge_model_name}-{config.temperature}"
-        + f"-{config.top_p}-{datetime.now().isoformat()}.json",
+        save_path,
         "w",
     ) as f:
         dump(total_results, f, indent=2, ensure_ascii=False)
