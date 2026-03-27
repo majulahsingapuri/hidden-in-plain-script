@@ -9,5 +9,3 @@ class Config(BaseSettings):
     hf_token: str
     judge_provider: Literal["openai", "anthropic", "ollama"] = "ollama"
     judge_model_name: str = "gpt-oss:20b"
-    temperature: float = 0.9
-    top_p: int = 0

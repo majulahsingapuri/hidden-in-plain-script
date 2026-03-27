@@ -70,8 +70,7 @@ def run_experiment(
 
     save_path = Path( 
         f"./results/rq2/{config.model.replace("/", "-")}"
-        + f"-{config.judge_model_name}-{config.temperature}"
-        + f"-{config.top_p}-{datetime.now().isoformat()}.json" 
+        + f"-{datetime.now().isoformat()}.json" 
     ).mkdir(parents=True, exist_ok=True)
 
     with open(
