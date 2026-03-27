@@ -120,7 +120,8 @@ def run_experiment(
         f"./results/rq1/{config.model.replace("/", "-")}"
         + f"-{config.judge_model_name}"
         + f"-{datetime.now().isoformat()}.json"
-    ).mkdir(parents=True, exist_ok=True)
+    )
+    save_path.mkdir(parents=True, exist_ok=True)
 
     with open(
         save_path,
