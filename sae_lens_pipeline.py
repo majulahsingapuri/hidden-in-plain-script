@@ -71,6 +71,16 @@ def extract_top_features(acts: torch.Tensor, top_k: int = 5) -> list[dict]:
     return results
 
 
+
+def sae_features(model: LanguageModel, prompt_text, sae: SAE, target_layer: int, top_k: int) -> tuple[
+    list[str], list[dict]]:
+    input_words, hidden_states = extract_hidden_states(model, prompt_text, target_layer)
+    acts = decompose_features(sae, hidden_states)
+    token_features = extract_top_features(acts, top_k)
+    return input_words, token_features
+
+
+
 def visualize_sae_features(
     input_words: list[str],
     acts: torch.Tensor,
@@ -123,6 +133,7 @@ def append_result(output_path: Path, result: dict):
         f.write(json.dumps(result, ensure_ascii=False) + "\n")
 
 
+
 VARIANT_KEYS = ["en", "en_gu", "en_hi", "en_ta", "en_te",
                 "gu", "gu_en", "hi", "hi_en", "ta", "ta_en", "te", "te_en"]
 
@@ -163,9 +174,7 @@ def run_batch(
                 continue
 
             prompt_text = prompt_entry[variant]
-            input_words, hidden_states = extract_hidden_states(model, prompt_text, target_layer)
-            acts = decompose_features(sae, hidden_states)
-            token_features = extract_top_features(acts, top_k)
+            input_words, token_features = sae_features(model, prompt_text, sae, target_layer, top_k)
 
             result = {
                 "prompt_id": prompt_id,
@@ -181,7 +190,6 @@ def run_batch(
             print(f"[{processed}/{total}] {prompt_id} / {variant}")
 
     print(f"Done. Wrote {processed} new entries to {output_path}")
-
 
 def main():
     parser = argparse.ArgumentParser(description="SAE feature decomposition over transliterations.")
