@@ -11,6 +11,7 @@ import torch
 
 from judge import judge_response_async, JUDGE_SYSTEM_PROMPT, EvaluationResponse
 from config import Config
+from utils import build_variants, iter_batches, iter_work_items
 
 
 async def judge_batch(
@@ -36,6 +37,8 @@ def run_experiment(
     limit: int = 0,
     batch_size: int = 16,
     judge_concurrency: int = 4,
+    output_path: Path | None = None,
+    resume: bool = False,
 ):
     config = Config()
     print("Config Loaded")
@@ -43,14 +46,17 @@ def run_experiment(
     login(token=config.hf_token)
     print("Logged into HF")
 
-    model = Gemma3ForConditionalGeneration.from_pretrained(model_name)
-    processor = Gemma3Processor.from_pretrained(model_name)
-    print(f"Model loaded: {model_name}")
-
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for batched generation but is not available.")
     device = torch.device("cuda")
-    model.to(device)
+
+    model = Gemma3ForConditionalGeneration.from_pretrained(
+        model_name,
+        low_cpu_mem_usage=True,
+        device_map="auto",
+    )
+    processor = Gemma3Processor.from_pretrained(model_name)
+    print(f"Model loaded: {model_name}")
 
     judge = Agent(
         f"{config.judge_provider}:{config.judge_model_name}",
@@ -59,7 +65,39 @@ def run_experiment(
     )
     print("Judge Initialised")
 
+    save_path = (
+        output_path
+        if output_path is not None
+        else Path(
+            f"./results/rq1/{model_name.replace("/", "-")}"
+            + f"-{config.judge_model_name}"
+            + f"-{datetime.now().isoformat()}.json"
+        )
+    )
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+
     total_results = []
+    completed_keys: set[tuple[str, str]] = set()
+    if resume and save_path.exists():
+        with open(save_path, "r") as f:
+            try:
+                total_results = load(f)
+            except Exception:
+                total_results = []
+        if isinstance(total_results, list):
+            completed_keys = {
+                (str(item.get("prompt_id")), str(item.get("variant")))
+                for item in total_results
+                if isinstance(item, dict)
+                and item.get("prompt_id") is not None
+                and item.get("variant") is not None
+            }
+        else:
+            total_results = []
+            completed_keys = set()
+        print(f"Resuming: loaded {len(completed_keys)} completed items from {save_path}")
+    elif resume:
+        print(f"Resume requested but no existing file at {save_path}. Starting fresh.")
 
     with open(data_path, "r") as f:
         prompts = load(f)
@@ -67,33 +105,15 @@ def run_experiment(
     if limit:
         prompts = prompts[:limit]
 
-    variants = ["en"] + [
-        version for lang in langs for version in [lang, f"{lang}_en", f"en_{lang}"]
-    ]
+    variants = build_variants(langs)
 
-    work_items = []
-    for prompt in prompts:
-        for variant in variants:
-            work_items.append(
-                {
-                    "variant": variant,
-                    "prompt_text": prompt[variant],
-                    "prompt_en": prompt["en"],
-                    "prompt_id": prompt["prompt_id"]
-                }
-            )
-
-    batches = []
-    for i in tqdm(range(0, len(work_items), batch_size), position=0, desc="Batching Inputs"):
-        batch_items = work_items[i : i + batch_size]
+    work_iter = iter_work_items(prompts, variants, completed_keys)
+    for batch_items in tqdm(iter_batches(work_iter, batch_size), position=0, desc="Generating Data"):
         batch_inputs = processor(
             text=[item["prompt_text"] for item in batch_items],
             padding=True,
             return_tensors="pt",
         )
-        batches.append((batch_items, batch_inputs))
-
-    for batch_items, batch_inputs in tqdm(batches, position=0, desc="Generating Data"):
         batch_inputs = {k: v.to(device) for k, v in batch_inputs.items()}
         outputs = model.generate(
             **batch_inputs,
@@ -118,13 +138,10 @@ def run_experiment(
                 "gibberish": verdict.gibberish,
             }
             total_results.append(result)
+            completed_keys.add((str(item["prompt_id"]), str(item["variant"])))
 
-    save_path = Path( 
-        f"./results/rq1/{model_name.replace("/", "-")}"
-        + f"-{config.judge_model_name}"
-        + f"-{datetime.now().isoformat()}.json"
-    )
-    save_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(save_path, "w") as f:
+            dump(total_results, f, indent=2, ensure_ascii=False)
 
     with open(
         save_path,
@@ -173,6 +190,18 @@ def main():
         default=4,
         help="Max number of concurrent judge LLM calls.",
     )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=None,
+        help="Path to write results JSON. If omitted, a timestamped path is used.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from existing --output file by skipping completed prompt_id+variant pairs.",
+    )
     args = parser.parse_args()
     run_experiment(
         args.data,
@@ -181,6 +210,8 @@ def main():
         args.limit,
         args.batch_size,
         args.judge_concurrency,
+        args.output,
+        args.resume,
     )
 
 

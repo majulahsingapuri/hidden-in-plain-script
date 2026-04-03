@@ -292,3 +292,39 @@ def generate_trace(
                 )
 
     return responses
+
+
+def build_variants(langs: list[str]) -> list[str]:
+    return ["en"] + [
+        version for lang in langs for version in [lang, f"{lang}_en", f"en_{lang}"]
+    ]
+
+
+def iter_work_items(
+    prompts_list: list[dict],
+    variants_list: list[str],
+    completed: set[tuple[str, str]] | None = None,
+):
+    completed = completed or set()
+    for prompt in prompts_list:
+        for variant in variants_list:
+            key = (str(prompt.get("prompt_id")), str(variant))
+            if key in completed:
+                continue
+            yield {
+                "variant": variant,
+                "prompt_text": prompt[variant],
+                "prompt_en": prompt["en"],
+                "prompt_id": prompt["prompt_id"],
+            }
+
+
+def iter_batches(items_iter, size: int):
+    batch = []
+    for item in items_iter:
+        batch.append(item)
+        if len(batch) == size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch

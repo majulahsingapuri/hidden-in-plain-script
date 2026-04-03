@@ -7,7 +7,7 @@ from huggingface_hub import login
 from pathlib import Path
 
 from config import Config
-from utils import generate_trace
+from utils import build_variants, generate_trace, iter_batches, iter_work_items
 
 
 def run_experiment(
@@ -36,28 +36,11 @@ def run_experiment(
     if limit:
         prompts = prompts[:limit]
 
-    variants = ["en"] + [
-        version for lang in langs for version in [lang, f"{lang}_en", f"en_{lang}"]
-    ]
+    variants = build_variants(langs)
 
-    work_items = []
-    for prompt in prompts:
-        for variant in variants:
-            work_items.append(
-                {
-                    "variant": variant,
-                    "prompt_text": prompt[variant],
-                    "prompt_en": prompt["en"],
-                    "prompt_id": prompt["prompt_id"],
-                }
-            )
-
-    batches = []
-    for i in tqdm(range(0, len(work_items), batch_size), position=0, desc="Batching Inputs"):
-        batch_items = work_items[i : i + batch_size]
-        batches.append((batch_items, [item["prompt_text"] for item in batch_items]))
-
-    for batch_items, batch_inputs in tqdm(batches, position=0, desc="Generating Data"):
+    work_iter = iter_work_items(prompts, variants)
+    for batch_items in tqdm(iter_batches(work_iter, batch_size), position=0, desc="Generating Data"):
+        batch_inputs = [item["prompt_text"] for item in batch_items]
 
         responses = generate_trace(
             model,
