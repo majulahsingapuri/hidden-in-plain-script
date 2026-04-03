@@ -328,3 +328,25 @@ def iter_batches(items_iter, size: int):
             batch = []
     if batch:
         yield batch
+
+
+def count_work_items(
+    prompts_list: list[dict],
+    variants_list: list[str],
+    completed: set[tuple[str, str]] | None = None,
+) -> int:
+    completed = completed or set()
+    count = 0
+    for prompt in prompts_list:
+        for variant in variants_list:
+            key = (str(prompt.get("prompt_id")), str(variant))
+            if key in completed:
+                continue
+            count += 1
+    return count
+
+
+def count_batches(total_items: int, batch_size: int) -> int:
+    if batch_size <= 0:
+        return 0
+    return (total_items + batch_size - 1) // batch_size

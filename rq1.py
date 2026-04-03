@@ -11,7 +11,13 @@ import torch
 
 from judge import judge_response_async, JUDGE_SYSTEM_PROMPT, EvaluationResponse
 from config import Config
-from utils import build_variants, iter_batches, iter_work_items
+from utils import (
+    build_variants,
+    count_batches,
+    count_work_items,
+    iter_batches,
+    iter_work_items,
+)
 
 
 async def judge_batch(
@@ -107,8 +113,15 @@ def run_experiment(
 
     variants = build_variants(langs)
 
+    total_items = count_work_items(prompts, variants, completed_keys)
+    total_batches = count_batches(total_items, batch_size)
     work_iter = iter_work_items(prompts, variants, completed_keys)
-    for batch_items in tqdm(iter_batches(work_iter, batch_size), position=0, desc="Generating Data"):
+    for batch_items in tqdm(
+        iter_batches(work_iter, batch_size),
+        total=total_batches,
+        position=0,
+        desc="Generating Data",
+    ):
         batch_inputs = processor(
             text=[item["prompt_text"] for item in batch_items],
             padding=True,

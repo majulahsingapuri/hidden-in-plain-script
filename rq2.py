@@ -7,7 +7,14 @@ from huggingface_hub import login
 from pathlib import Path
 
 from config import Config
-from utils import build_variants, generate_trace, iter_batches, iter_work_items
+from utils import (
+    build_variants,
+    count_batches,
+    count_work_items,
+    generate_trace,
+    iter_batches,
+    iter_work_items,
+)
 
 
 def run_experiment(
@@ -38,8 +45,15 @@ def run_experiment(
 
     variants = build_variants(langs)
 
+    total_items = count_work_items(prompts, variants)
+    total_batches = count_batches(total_items, batch_size)
     work_iter = iter_work_items(prompts, variants)
-    for batch_items in tqdm(iter_batches(work_iter, batch_size), position=0, desc="Generating Data"):
+    for batch_items in tqdm(
+        iter_batches(work_iter, batch_size),
+        total=total_batches,
+        position=0,
+        desc="Generating Data",
+    ):
         batch_inputs = [item["prompt_text"] for item in batch_items]
 
         responses = generate_trace(
