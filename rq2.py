@@ -45,6 +45,7 @@ def run_experiment(
                     "variant": variant,
                     "prompt_text": prompt[variant],
                     "prompt_en": prompt["en"],
+                    "prompt_id": prompt["prompt_id"],
                 }
             )
 
@@ -63,6 +64,7 @@ def run_experiment(
             result = {
                 "variant": item["variant"],
                 "prompt": item["prompt_text"],
+                "prompt_id": item["prompt_id"],
                 "words": response["words"],
                 "tokens": response["tokens"].tolist()
             }
