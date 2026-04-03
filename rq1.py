@@ -31,8 +31,9 @@ async def judge_batch(
 
 def run_experiment(
     data_path: Path,
+    model_name: str,
     langs: list[str],
-    limit: int = 5,
+    limit: int = 0,
     batch_size: int = 16,
     judge_concurrency: int = 4,
 ):
@@ -42,9 +43,9 @@ def run_experiment(
     login(token=config.hf_token)
     print("Logged into HF")
 
-    model = Gemma3ForConditionalGeneration.from_pretrained(config.model)
-    processor = Gemma3Processor.from_pretrained(config.model)
-    print(f"Model loaded: {config.model}")
+    model = Gemma3ForConditionalGeneration.from_pretrained(model_name)
+    processor = Gemma3Processor.from_pretrained(model_name)
+    print(f"Model loaded: {model_name}")
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for batched generation but is not available.")
@@ -119,7 +120,7 @@ def run_experiment(
             total_results.append(result)
 
     save_path = Path( 
-        f"./results/rq1/{config.model.replace("/", "-")}"
+        f"./results/rq1/{model_name.replace("/", "-")}"
         + f"-{config.judge_model_name}"
         + f"-{datetime.now().isoformat()}.json"
     )
@@ -142,15 +143,22 @@ def main():
         help="Path to a JSON file containing dataset",
     )
     parser.add_argument(
+        "--model",
+        type=str,
+        default="google/gemma-3-4b-it",
+        help="Hugging Face model name or local path.",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
+        default=0,
         help="Limit the number of data points used for run",
     )
     parser.add_argument(
         "--langs",
         "-l",
         nargs="+",
-        default=["gu"],
+        default=["gu", "hi", "ta", "te"],
         help="Target language codes (e.g., gu te).",
     )
     parser.add_argument(
@@ -167,7 +175,12 @@ def main():
     )
     args = parser.parse_args()
     run_experiment(
-        args.data, args.langs, args.limit, args.batch_size, args.judge_concurrency
+        args.data,
+        args.model,
+        args.langs,
+        args.limit,
+        args.batch_size,
+        args.judge_concurrency,
     )
 
 

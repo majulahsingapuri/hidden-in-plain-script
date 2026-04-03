@@ -2,7 +2,8 @@
 
 Research code for evaluating how LLM safety behavior changes when prompts are transliterated into non-Latin scripts. The pipeline pulls JailbreakBench behavior prompts, transliterates them into target scripts, runs a target model, and uses an LLM judge to label refusals and harmfulness. A logit-lens notebook is included for inspecting internal representations.
 
-**Repository Layout**
+## Repository Layout
+
 - `process_dataset.py` downloads JailbreakBench JBB-Behaviors and then transliterates it into target scripts.
 - `transliterate.py` transliterates sentences using the Google transliteration API or an LLM.
 - `rq1.py` runs the main experiment and writes JSON results.
@@ -12,7 +13,8 @@ Research code for evaluating how LLM safety behavior changes when prompts are tr
 - `assets/transliterations.json` caches transliterations.
 - `results/` stores experiment outputs.
 
-**Setup**
+## Setup
+
 - Python 3.14 is required (see `pyproject.toml`).
 - Install dependencies with Poetry:
 
@@ -36,35 +38,65 @@ cp .env.example .env
 
 Fill in `HF_TOKEN` for Hugging Face model access. If you use LLM-based transliteration or judging, set the provider-specific API keys required by their SDKs.
 
-**Dataset + Transliteration Pipeline**
+## Dataset + Transliteration Pipeline
+
 `process_dataset.py` pulls the JailbreakBench JBB-Behaviors split (harmful and benign), saves it to JSON, and then transliterates each prompt into one or more target scripts.
 
 ```bash
-python process_dataset.py -l gu te
+python process_dataset.py -l gu hi te ta
 ```
 
 This writes to `assets/transliterations.json` by default. Each entry includes `en`, `prompt_id`, `behavior`, `split`, plus one key per target language code.
 
-**Transliterate Directly**
+## Transliterate Directly
+
 You can transliterate your own sentences or an existing JSON list.
 
 ```bash
 # Sentences on the command line
-python transliterate.py -s "Hello world" -l gu
+python transliterate.py -s "Hello world" -l gu hi te ta
 
 # Transliterate a JSON list or list of objects with an `en` field
-python transliterate.py -f assets/transliterations.json -l gu te
+python transliterate.py -f assets/transliterations.json -l gu hi te ta
 
 # LLM-based transliteration
 python transliterate.py -s "Hello world" --method llm --provider openai --model <model>
 ```
 
-**Run the Experiment**
-`rq1.py` loads transliterated prompts, generates model responses with NNSight, and uses an LLM judge to label refusals and harmfulness. Results are saved in `results/` with a timestamped filename.
+## Run the Experiments
+
+`rq1.py` loads transliterated prompts, generates model responses, and uses an LLM judge to label refusals and harmfulness. Results are saved in `results/` with a timestamped filename.
 
 ```bash
-python rq1.py -d assets/transliterations.json -l gu --limit 50
+python rq1.py -d assets/transliterations.json -l gu hi te ta --limit 0 --model google/gemma-3-4b-it
 ```
 
-**Results**
+Shortcut scripts are provided with the same defaults as the Python CLIs:
+
+```bash
+./rq1.sh
+./rq2.sh
+./rq3.sh
+```
+
+You can override settings via env vars or CLI flags. Example:
+
+```bash
+MODEL_NAME=google/gemma-3-4b-it \
+LANGS="gu hi te ta" \
+LIMIT=10 \
+./rq2.sh
+```
+
+## Model Path Overrides (rq2/rq3)
+
+Some NNSight models use different internal paths for layers or normalization. You can pass dot-path overrides:
+
+```bash
+python rq2.py --layers-path model.language_model.layers --norm-path model.language_model.norm
+python rq3.py --layers-path model.language_model.layers --norm-path model.language_model.norm --limit 0
+```
+
+## Results
+
 Output JSON includes the variant (language code), transliterated prompt, model response, and judge annotations (`judge_refused`, `judge_harmful`, `judge_reason`).

@@ -13,7 +13,7 @@ from pathlib import Path
 from nnsight import LanguageModel
 from sae_lens import SAE
 import torch
-from config import Config
+from utils import resolve_attr_path
 
 
 def load_model(model_name: str = "google/gemma-3-4b-it") -> LanguageModel:
@@ -30,12 +30,18 @@ def load_sae(
 
 
 def extract_hidden_states(
-    model: LanguageModel, prompt: str, target_layer: int
+    model: LanguageModel,
+    prompt: str,
+    target_layer: int,
+    layers_path: str,
+    norm_path: str,
 ) -> tuple[list[str], torch.Tensor]:
+    layers = resolve_attr_path(model, layers_path)
+    norm = resolve_attr_path(model, norm_path)
     with model.trace() as tracer:
         with tracer.invoke(prompt) as invoker:
-            output = model.model.language_model.layers[target_layer].output.save()
-            hidden_states = model.model.language_model.norm(output)
+            output = layers[target_layer].output.save()
+            hidden_states = norm(output)
 
     return hidden_states
 
@@ -47,9 +53,20 @@ def decompose_features(sae: SAE, hidden_states: torch.Tensor) -> torch.Tensor:
 
 
 def sae_features(
-    model: LanguageModel, prompt_text, sae: SAE, target_layer: int
+    model: LanguageModel,
+    prompt_text,
+    sae: SAE,
+    target_layer: int,
+    layers_path: str,
+    norm_path: str,
 ) -> torch.Tensor:
-    hidden_states = extract_hidden_states(model, prompt_text, target_layer)
+    hidden_states = extract_hidden_states(
+        model,
+        prompt_text,
+        target_layer,
+        layers_path,
+        norm_path,
+    )
     acts = decompose_features(sae, hidden_states)
     # Mean-pool across token positions to get a single feature vector per prompt.
     return acts.mean(dim=0)
@@ -112,15 +129,16 @@ def save_activation(
 def run_batch(
     data_path: Path,
     output_path: Path,
+    model_name: str,
     sae_release: str,
     sae_id: str,
+    limit: int = 0,
     target_layer: int = 17,
+    layers_path: str = "model.language_model.layers",
+    norm_path: str = "model.language_model.norm",
     fresh: bool = False,
     langs: list[str] = [],
 ):
-
-    config = Config()
-    print("Config Loaded")
 
     variants = ["en"] + [
         version for lang in langs for version in [lang, f"{lang}_en", f"en_{lang}"]
@@ -134,7 +152,10 @@ def run_batch(
     with open(data_path, "r", encoding="utf-8") as f:
         prompts = json.load(f)
 
-    model = load_model(config.model)
+    if limit:
+        prompts = prompts[:limit]
+
+    model = load_model(model_name)
     sae = load_sae(release=sae_release, sae_id=sae_id)
 
     for prompt_entry in tqdm(prompts, position=0):
@@ -147,7 +168,14 @@ def run_batch(
                 continue
 
             prompt_text = prompt_entry[variant]
-            activations = sae_features(model, prompt_text, sae, target_layer)
+            activations = sae_features(
+                model,
+                prompt_text,
+                sae,
+                target_layer,
+                layers_path,
+                norm_path,
+            )
 
             activation_path = save_activation(
                 output_path.parent / "sae_activations",
@@ -187,10 +215,34 @@ def main():
         help="Output progress JSON file.",
     )
     parser.add_argument(
+        "--model",
+        type=str,
+        default="google/gemma-3-4b-it",
+        help="Hugging Face model name or local path.",
+    )
+    parser.add_argument(
+        "--layers-path",
+        type=str,
+        default="model.language_model.layers",
+        help="Dot path from the LanguageModel object to the layer list/ModuleList.",
+    )
+    parser.add_argument(
+        "--norm-path",
+        type=str,
+        default="model.language_model.norm",
+        help="Dot path from the LanguageModel object to the final norm module.",
+    )
+    parser.add_argument(
         "--layer",
         type=int,
         default=17,
         help="Target layer for hidden state extraction.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Limit the number of data points used for run.",
     )
     parser.add_argument(
         "--sae-release",
@@ -209,14 +261,26 @@ def main():
         action="store_true",
         help="Start from scratch (delete existing output).",
     )
+    parser.add_argument(
+        "--langs",
+        "-l",
+        nargs="+",
+        default=["gu", "hi", "ta", "te"],
+        help="Target language codes (e.g., gu te).",
+    )
     args = parser.parse_args()
     run_batch(
         args.data,
         args.output,
+        args.model,
         args.sae_release,
         args.sae_id,
+        args.limit,
         args.layer,
+        args.layers_path,
+        args.norm_path,
         args.fresh,
+        args.langs,
     )
 
 

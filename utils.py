@@ -218,12 +218,36 @@ def build_script_indices(
     return {_id: lang for lang, _ids in ids.items() for _id in _ids}
 
 
+def resolve_attr_path(root: object, path: str) -> object:
+    """Resolve dotted attribute paths with optional list indexing."""
+    cur = root
+    if not path:
+        return cur
+    for part in path.split("."):
+        if not part:
+            continue
+        if part.endswith("]") and "[" in part:
+            name, idx = part[:-1].split("[", 1)
+            if name:
+                cur = getattr(cur, name)
+            cur = cur[int(idx)]
+        elif part.isdigit():
+            cur = cur[int(part)]
+        else:
+            cur = getattr(cur, part)
+    return cur
+
+
 def generate_trace(
-    model: LanguageModel, prompt_texts: Union[str, list[str]]
+    model: LanguageModel,
+    prompt_texts: Union[str, list[str]],
+    layers_path: str = "model.language_model.layers",
+    norm_path: str = "model.language_model.norm",
 ) -> list[dict[str, Union[list[list[str]], torch.Tensor]]]:
     """Run a single prompt through Gemma and return the internal representations."""
 
-    layers = model.model.language_model.layers
+    layers = resolve_attr_path(model, layers_path)
+    norm = resolve_attr_path(model, norm_path)
     if isinstance(prompt_texts, str):
         prompt_texts = [prompt_texts]
 
@@ -237,9 +261,7 @@ def generate_trace(
                 for layer_idx, layer in enumerate(layers):
                     # Process layer output through the model's head and layer normalization
                     layer_output = layer.output
-                    layer_output_normed = model.lm_head(
-                        model.model.language_model.norm(layer_output)
-                    )
+                    layer_output_normed = model.lm_head(norm(layer_output))
 
                     # Apply softmax to obtain probabilities and save the result
                     layer_probs = torch.nn.functional.softmax(
