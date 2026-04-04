@@ -238,6 +238,17 @@ def resolve_attr_path(root: object, path: str) -> object:
     return cur
 
 
+def _unwrap_layer_output(layer_output: object) -> object:
+    """Return the hidden states from a layer output that may be a tuple/ModelOutput."""
+    if isinstance(layer_output, (tuple, list)):
+        return layer_output[0]
+    if hasattr(layer_output, "last_hidden_state"):
+        return getattr(layer_output, "last_hidden_state")
+    if hasattr(layer_output, "hidden_states"):
+        return getattr(layer_output, "hidden_states")
+    return layer_output
+
+
 def generate_trace(
     model: LanguageModel,
     prompt_texts: Union[str, list[str]],
@@ -260,7 +271,7 @@ def generate_trace(
                 # store input tokens
                 for layer_idx, layer in enumerate(layers):
                     # Process layer output through the model's head and layer normalization
-                    layer_output = layer.output
+                    layer_output = _unwrap_layer_output(layer.output)
                     layer_output_normed = model.lm_head(norm(layer_output))
 
                     # Apply softmax to obtain probabilities and save the result
