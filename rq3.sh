@@ -3,7 +3,7 @@ set -euo pipefail
 
 python rq3.py \
   --data ./assets/transliterations.json \
-  --output ./assets/sae_features.json \
+  --output ./assets/gemma-3-4b-it/sae_features.json \
   --model "google/gemma-3-4b-it" \
   --limit 0 \
   --layers-path "model.language_model.layers" \
