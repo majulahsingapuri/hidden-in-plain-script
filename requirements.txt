@@ -112,6 +112,7 @@ prompt-toolkit
 propcache
 protobuf
 psutil
+pynvml
 ptyprocess
 pure-eval
 py2store

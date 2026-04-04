@@ -17,6 +17,7 @@ from utils import (
     count_work_items,
     iter_batches,
     iter_work_items,
+    ResourceMonitor,
 )
 
 
@@ -116,12 +117,17 @@ def run_experiment(
     total_items = count_work_items(prompts, variants, completed_keys)
     total_batches = count_batches(total_items, batch_size)
     work_iter = iter_work_items(prompts, variants, completed_keys)
-    for batch_items in tqdm(
+    monitor = ResourceMonitor()
+    pbar = tqdm(
         iter_batches(work_iter, batch_size),
         total=total_batches,
         position=0,
         desc="Generating Data",
-    ):
+    )
+    for batch_items in pbar:
+        postfix = monitor.tqdm_postfix()
+        if postfix:
+            pbar.set_postfix(postfix, refresh=False)
         batch_inputs = processor(
             text=[item["prompt_text"] for item in batch_items],
             padding=True,
@@ -155,6 +161,8 @@ def run_experiment(
 
         with open(save_path, "w") as f:
             dump(total_results, f, indent=2, ensure_ascii=False)
+
+    monitor.close()
 
     with open(
         save_path,

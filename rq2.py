@@ -14,6 +14,7 @@ from utils import (
     generate_trace,
     iter_batches,
     iter_work_items,
+    ResourceMonitor,
 )
 
 
@@ -48,12 +49,17 @@ def run_experiment(
     total_items = count_work_items(prompts, variants)
     total_batches = count_batches(total_items, batch_size)
     work_iter = iter_work_items(prompts, variants)
-    for batch_items in tqdm(
+    monitor = ResourceMonitor()
+    pbar = tqdm(
         iter_batches(work_iter, batch_size),
         total=total_batches,
         position=0,
         desc="Generating Data",
-    ):
+    )
+    for batch_items in pbar:
+        postfix = monitor.tqdm_postfix()
+        if postfix:
+            pbar.set_postfix(postfix, refresh=False)
         batch_inputs = [item["prompt_text"] for item in batch_items]
 
         responses = generate_trace(
@@ -74,6 +80,8 @@ def run_experiment(
                 "tokens": response["tokens"].tolist()
             }
             total_results.append(result)
+
+    monitor.close()
 
     save_path = Path( 
         f"./results/rq2/{model_name.replace("/", "-")}"

@@ -13,7 +13,7 @@ from pathlib import Path
 from nnsight import LanguageModel
 from sae_lens import SAE
 import torch
-from utils import resolve_attr_path
+from utils import resolve_attr_path, ResourceMonitor
 
 
 def load_model(model_name: str = "google/gemma-3-4b-it") -> LanguageModel:
@@ -158,8 +158,14 @@ def run_batch(
     model = load_model(model_name)
     sae = load_sae(release=sae_release, sae_id=sae_id)
 
-    for prompt_entry in tqdm(prompts, position=0):
-        for variant in tqdm(variants, position=1, leave=False):
+    monitor = ResourceMonitor()
+    prompts_bar = tqdm(prompts, position=0)
+    for prompt_entry in prompts_bar:
+        variants_bar = tqdm(variants, position=1, leave=False)
+        for variant in variants_bar:
+            postfix = monitor.tqdm_postfix()
+            if postfix:
+                variants_bar.set_postfix(postfix, refresh=False)
             prompt_id = prompt_entry["prompt_id"]
             if (prompt_id, variant, target_layer) in done_with_layer or (
                 prompt_id,
@@ -194,6 +200,8 @@ def run_batch(
 
             progress.append(result)
             save_progress(output_path, progress)
+
+    monitor.close()
 
 
 def main():

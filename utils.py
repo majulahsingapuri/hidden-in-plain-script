@@ -20,6 +20,82 @@ from langcodes import Language
 _SPECIAL_TOKEN_RE = re.compile(r"^<[^>]+>$")
 
 
+class ResourceMonitor:
+    def __init__(self, gpu_index: int = 0):
+        self._psutil = None
+        self._pynvml = None
+        self._gpu_handle = None
+        self._nvml_init = False
+
+        try:
+            import psutil  # type: ignore
+
+            self._psutil = psutil
+            # Warm up CPU percent so subsequent calls are non-blocking.
+            self._psutil.cpu_percent(interval=None)
+        except Exception:
+            self._psutil = None
+
+        try:
+            import pynvml  # type: ignore
+
+            pynvml.nvmlInit()
+            self._nvml_init = True
+            if pynvml.nvmlDeviceGetCount() > gpu_index:
+                self._pynvml = pynvml
+                self._gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
+        except Exception:
+            if self._nvml_init:
+                try:
+                    pynvml.nvmlShutdown()
+                except Exception:
+                    pass
+            self._pynvml = None
+            self._gpu_handle = None
+            self._nvml_init = False
+
+    def sample(self) -> dict[str, float]:
+        metrics: dict[str, float] = {}
+        if self._psutil is not None:
+            metrics["cpu"] = float(self._psutil.cpu_percent(interval=None))
+            metrics["ram"] = float(self._psutil.virtual_memory().percent)
+        if self._pynvml is not None and self._gpu_handle is not None:
+            util = self._pynvml.nvmlDeviceGetUtilizationRates(self._gpu_handle)
+            mem = self._pynvml.nvmlDeviceGetMemoryInfo(self._gpu_handle)
+            metrics["gpu"] = float(util.gpu)
+            metrics["vram"] = float((mem.used / mem.total) * 100) if mem.total else 0.0
+        return metrics
+
+    def tqdm_postfix(self) -> dict[str, str] | None:
+        metrics = self.sample()
+        if not metrics:
+            return None
+        postfix: dict[str, str] = {}
+        if "cpu" in metrics:
+            postfix["cpu%"] = f"{metrics['cpu']:.0f}"
+        if "ram" in metrics:
+            postfix["ram%"] = f"{metrics['ram']:.0f}"
+        if "gpu" in metrics:
+            postfix["gpu%"] = f"{metrics['gpu']:.0f}"
+        if "vram" in metrics:
+            postfix["vram%"] = f"{metrics['vram']:.0f}"
+        return postfix
+
+    def close(self):
+        if self._pynvml is not None and self._nvml_init:
+            try:
+                self._pynvml.nvmlShutdown()
+            except Exception:
+                pass
+            self._nvml_init = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+
+
 def _clean_token(token: str) -> str:
     if not token or _SPECIAL_TOKEN_RE.match(token):
         return ""
