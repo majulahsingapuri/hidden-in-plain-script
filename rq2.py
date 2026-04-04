@@ -93,7 +93,7 @@ def run_experiment(
         save_path,
         "w",
     ) as f:
-        dump(total_results, f, indent=2, ensure_ascii=False)
+        dump(total_results, f, ensure_ascii=False)
 
 
 def main():
