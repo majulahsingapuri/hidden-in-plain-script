@@ -42,6 +42,7 @@ def extract_hidden_states(
         with tracer.invoke(prompt) as invoker:
             output = layers[target_layer].output.save()
             hidden_states = norm(output)
+            hidden_states.save()
 
     return hidden_states
 

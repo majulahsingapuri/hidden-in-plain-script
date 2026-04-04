@@ -330,6 +330,7 @@ def generate_trace(
     prompt_texts: Union[str, list[str]],
     layers_path: str = "model.language_model.layers",
     norm_path: str = "model.language_model.norm",
+    return_max_probs: bool = False,
 ) -> list[dict[str, Union[list[list[str]], torch.Tensor]]]:
     """Run a single prompt through Gemma and return the internal representations."""
 
@@ -342,41 +343,40 @@ def generate_trace(
 
     with model.trace() as tracer:
         for prompt_text in prompt_texts:
-            with tracer.invoke(prompt_text) as invoker:
-                probs_layers = []
-                # store input tokens
+            with tracer.invoke(prompt_text):
+                token_layers = []
+                max_prob_layers = [] if return_max_probs else None
+
+                # Store token IDs per layer without materializing full softmaxes.
                 for layer_idx, layer in enumerate(layers):
-                    # Process layer output through the model's head and layer normalization
                     layer_output = _unwrap_layer_output(layer.output)
-                    layer_output_normed = model.lm_head(norm(layer_output))
+                    logits = model.lm_head(norm(layer_output))
 
-                    # Apply softmax to obtain probabilities and save the result
-                    layer_probs = torch.nn.functional.softmax(
-                        layer_output_normed, dim=-1
-                    ).save()
-                    probs_layers.append(layer_probs)
+                    max_logits, token_ids = logits.max(dim=-1)
+                    token_layers.append(token_ids)
 
-                probs = torch.cat(probs_layers)
+                    if return_max_probs:
+                        # Compute max softmax probability without storing the full distribution.
+                        logsumexp = torch.logsumexp(logits, dim=-1)
+                        max_prob_layers.append((max_logits - logsumexp).exp())
 
-                # Find the maximum probability and corresponding tokens for each position
-                max_probs, tokens = probs.max(dim=-1)
+                tokens = torch.stack(token_layers)
+                tokens_cpu = tokens.detach().cpu()
 
-                # Decode token IDs to words for each layer
                 words = [
-                    [model.tokenizer.decode(t) for t in layer_tokens]
-                    for layer_tokens in tokens
+                    [model.tokenizer.decode(int(t)) for t in layer_tokens]
+                    for layer_tokens in tokens_cpu
                 ]
 
-                # Access the 'input_ids' attribute of the invoker object to get the input words
+                response = {
+                    "prompt_text": prompt_text,
+                    "words": words,
+                    "tokens": tokens_cpu,
+                }
+                if return_max_probs and max_prob_layers is not None:
+                    response["max_probs"] = torch.stack(max_prob_layers).detach().cpu()
 
-                responses.append(
-                    {
-                        "prompt_text": prompt_text,
-                        "words": words,
-                        "max_probs": max_probs,
-                        "tokens": tokens,
-                    }
-                )
+                responses.append(response)
 
     return responses
 
