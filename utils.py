@@ -362,6 +362,8 @@ def generate_trace(
 
                 tokens = torch.stack(token_layers)
                 tokens_cpu = tokens.detach().cpu()
+                if tokens_cpu.dim() == 3 and tokens_cpu.shape[1] == 1:
+                    tokens_cpu = tokens_cpu[:, 0, :]
 
                 words = [
                     [model.tokenizer.decode(int(t)) for t in layer_tokens]
@@ -374,7 +376,10 @@ def generate_trace(
                     "tokens": tokens_cpu,
                 }
                 if return_max_probs and max_prob_layers is not None:
-                    response["max_probs"] = torch.stack(max_prob_layers).detach().cpu()
+                    max_probs = torch.stack(max_prob_layers).detach().cpu()
+                    if max_probs.dim() == 3 and max_probs.shape[1] == 1:
+                        max_probs = max_probs[:, 0, :]
+                    response["max_probs"] = max_probs
 
                 responses.append(response)
 
