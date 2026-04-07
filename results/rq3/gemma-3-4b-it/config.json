@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-04-07T13:33:57.254773",
+  "data_dir": "assets/gemma-3-4b-it",
+  "output_dir": "results/rq3/gemma-3-4b-it",
+  "device": "mps",
+  "args": {
+    "data_dir": "assets/gemma-3-4b-it",
+    "output_root": "results/rq3",
+    "model_name": "gemma-3-4b-it",
+    "target_layer": null,
+    "max_items": null,
+    "seed": 42,
+    "epochs": 10,
+    "batch_size": 128,
+    "lr": 0.0008248762379386861,
+    "weight_decay": 0.0013016850427045729,
+    "normalize": "zscore",
+    "l2_eps": 1e-8,
+    "max_grad_norm": 5.0,
+    "top_k": 4096,
+    "top_k_mode": "abs",
+    "temperature_scale": true,
+    "early_stop_patience": 3,
+    "early_stop_min_delta": 0.0001,
+    "num_workers": 0,
+    "device": "mps",
+    "cpu": false,
+    "threshold": null,
+    "log_level": "INFO"
+  },
+  "input_dim": 262144,
+  "num_examples": 2600,
+  "num_train": 1818,
+  "num_val": 520,
+  "num_test": 262,
+  "temperature": 115.55133056640625,
+  "top_k": 4096,
+  "top_k_mode": "abs",
+  "normalizer": {
+    "type": "zscore",
+    "path": "results/rq3/gemma-3-4b-it/normalizer.pt"
+  }
+}
