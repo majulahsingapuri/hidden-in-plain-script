@@ -136,10 +136,14 @@ def run_experiment(
         batch_inputs = {k: v.to(device) for k, v in batch_inputs.items()}
         outputs = model.generate(
             **batch_inputs,
-            max_new_tokens=300,
+            max_new_tokens=500,
             do_sample=False,
         )
-        responses = processor.batch_decode(outputs, skip_special_tokens=True)
+        input_lengths = batch_inputs["attention_mask"].sum(dim=1).tolist()
+        generated_ids = [
+            output[int(input_len) :] for output, input_len in zip(outputs, input_lengths)
+        ]
+        responses = processor.batch_decode(generated_ids, skip_special_tokens=True)
 
         verdicts = asyncio.run(
             judge_batch(judge, batch_items, responses, judge_concurrency)

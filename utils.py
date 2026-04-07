@@ -1,23 +1,10 @@
-from typing import Union
 import unicodedata
+from functools import lru_cache
+from typing import Union
 
 import torch
 from nnsight import LanguageModel
 from transformers import PreTrainedTokenizerBase
-
-try:
-    import regex as re
-
-    _REGEX_AVAILABLE = True
-except Exception:  # pragma: no cover - fallback for missing dependency
-    import re  # type: ignore
-
-    _REGEX_AVAILABLE = False
-
-from langcodes import Language
-
-
-_SPECIAL_TOKEN_RE = re.compile(r"^<[^>]+>$")
 
 
 class ResourceMonitor:
@@ -94,204 +81,6 @@ class ResourceMonitor:
 
     def __exit__(self, exc_type, exc, tb):
         self.close()
-
-
-def _clean_token(token: str) -> str:
-    if not token or _SPECIAL_TOKEN_RE.match(token):
-        return ""
-    token = token.lstrip("▁Ġ").strip()
-    return token
-
-
-def _get_lang_to_script(lang_codes: list[str]) -> dict[str, str]:
-    lang_to_script: dict[str, str] = {}
-    unknown: list[str] = []
-    for lang in lang_codes:
-        script = None
-        try:
-            lang_obj = Language.get(lang)
-            maximized = lang_obj.maximize()
-            script = maximized.script or lang_obj.script
-        except Exception:
-            script = None
-        if not script or script in {"Zyyy", "Zinh"}:
-            unknown.append(lang)
-        lang_to_script[lang] = script
-    if unknown:
-        raise ValueError(f"Unable to determine script for: {sorted(unknown)}")
-    return lang_to_script
-
-
-def _script_code_aliases(script: str) -> list[str]:
-    fallback = {
-        "Latn": "Latin",
-        "Cyrl": "Cyrillic",
-        "Grek": "Greek",
-        "Arab": "Arabic",
-        "Hebr": "Hebrew",
-        "Deva": "Devanagari",
-        "Gujr": "Gujarati",
-        "Taml": "Tamil",
-        "Telu": "Telugu",
-        "Knda": "Kannada",
-        "Mlym": "Malayalam",
-        "Beng": "Bengali",
-        "Guru": "Gurmukhi",
-        "Orya": "Oriya",
-        "Sinh": "Sinhala",
-        "Thai": "Thai",
-        "Laoo": "Lao",
-        "Mymr": "Myanmar",
-        "Khmr": "Khmer",
-        "Ethi": "Ethiopic",
-        "Geor": "Georgian",
-        "Armn": "Armenian",
-    }
-    if script in {"Hans", "Hant"}:
-        return ["Han", "Hani"]
-    if script == "Jpan":
-        return ["Hira", "Kana", "Han", "Hani"]
-    if script == "Kore":
-        return ["Hangul", "Han", "Hani"]
-    if script == "Hrkt":
-        return ["Hira", "Kana"]
-
-    if script in fallback:
-        return [fallback[script], script]
-
-    try:
-        from langcodes.data import scripts as script_data
-
-        info = script_data.get(script)
-        if isinstance(info, dict):
-            name = info.get("name")
-            if name:
-                return [name, script]
-    except Exception:
-        pass
-
-    return [script]
-
-
-def _build_script_regex(scripts: list[str]) -> dict[str, list[re.Pattern]]:
-    script_regex: dict[str, list[re.Pattern]] = {}
-    for script in scripts:
-        if _REGEX_AVAILABLE:
-            aliases = _script_code_aliases(script)
-            patterns = [re.compile(rf"\\p{{Script={alias}}}") for alias in aliases]
-            script_regex[script] = patterns
-        else:
-            script_regex[script] = []
-    return script_regex
-
-
-def _name_keywords_for_script(script: str) -> list[str]:
-    aliases = _script_code_aliases(script)
-    keywords = {alias.upper() for alias in aliases}
-    if script in {"Hans", "Hant", "Hani", "Han"}:
-        keywords.update(
-            [
-                "CJK UNIFIED IDEOGRAPH",
-                "CJK COMPATIBILITY IDEOGRAPH",
-                "IDEOGRAPH",
-            ]
-        )
-    if script in {"Jpan", "Hrkt"}:
-        keywords.update(["HIRAGANA", "KATAKANA"])
-    if script == "Kore":
-        keywords.update(["HANGUL"])
-    return list(keywords)
-
-
-def _detect_scripts(text: str, script_regex: dict[str, list[re.Pattern]]) -> set[str]:
-    scripts = set()
-    if _REGEX_AVAILABLE and script_regex:
-        for script, patterns in script_regex.items():
-            if any(pattern.search(text) for pattern in patterns):
-                scripts.add(script)
-        if scripts:
-            return scripts
-
-    # Fallback: infer script by Unicode name keywords.
-    scripts_to_check = list(script_regex.keys())
-    for ch in text:
-        try:
-            name = unicodedata.name(ch)
-        except ValueError:
-            continue
-        upper = name.upper()
-        for script in scripts_to_check:
-            for kw in _name_keywords_for_script(script):
-                if kw in upper:
-                    scripts.add(script)
-                    break
-    return scripts
-
-
-def _build_token_meta(
-    tokenizer: PreTrainedTokenizerBase, lang_codes: list[str]
-) -> dict[int, tuple[str, object]]:
-    lang_to_script = _get_lang_to_script(lang_codes)
-    script_to_langs: dict[str, set[str]] = {}
-    for lang, script in lang_to_script.items():
-        script_to_langs.setdefault(script, set()).add(lang)
-
-    script_regex = _build_script_regex(list(script_to_langs.keys()))
-
-    token_meta: dict[int, tuple[str, object]] = {}
-    for token_id in range(tokenizer.vocab_size):
-        tok = tokenizer.convert_ids_to_tokens(token_id)
-        tok_clean = _clean_token(tok)
-
-        scripts = set()
-        if tok_clean:
-            scripts = _detect_scripts(tok_clean, script_regex)
-
-        if not scripts:
-            try:
-                decoded = tokenizer.decode([token_id])
-            except Exception:
-                decoded = ""
-            decoded_clean = _clean_token(decoded)
-            if decoded_clean:
-                scripts = _detect_scripts(decoded_clean, script_regex)
-
-        if not scripts:
-            token_meta[token_id] = ("unk", None)
-        elif len(scripts) > 1:
-            token_meta[token_id] = ("mixed", None)
-        else:
-            script = next(iter(scripts))
-            langs = script_to_langs.get(script, set())
-            if len(langs) == 1:
-                token_meta[token_id] = ("lang", next(iter(langs)))
-            elif len(langs) > 1:
-                token_meta[token_id] = ("ambiguous", langs)
-            else:
-                token_meta[token_id] = ("unk", None)
-    return token_meta
-
-
-def build_script_indices(
-    tokenizer: PreTrainedTokenizerBase, lang_codes: list[str]
-) -> dict[int, str]:
-    """
-    Collect token IDs by language using Unicode script detection.
-    Ambiguous or mixed-script tokens are placed under 'unk' or 'mixed'.
-    """
-    token_meta = _build_token_meta(tokenizer, lang_codes)
-    ids: dict[str, list[int]] = {lang: [] for lang in lang_codes}
-    ids["unk"] = []
-    ids["mixed"] = []
-
-    for token_id, (status, value) in token_meta.items():
-        if status == "lang":
-            ids[value].append(token_id)
-        elif status == "mixed":
-            ids["mixed"].append(token_id)
-        else:
-            ids["unk"].append(token_id)
-    return {_id: lang for lang, _ids in ids.items() for _id in _ids}
 
 
 def resolve_attr_path(root: object, path: str) -> object:
@@ -387,6 +176,7 @@ def generate_trace(
 
 
 def build_variants(langs: list[str]) -> list[str]:
+    """Return language pair variants used in experiments (en, lang, lang_en, en_lang)."""
     return ["en"] + [
         version for lang in langs for version in [lang, f"{lang}_en", f"en_{lang}"]
     ]
@@ -397,6 +187,7 @@ def iter_work_items(
     variants_list: list[str],
     completed: set[tuple[str, str]] | None = None,
 ):
+    """Yield pending work items for (prompt, variant) pairs, skipping completed ones."""
     completed = completed or set()
     for prompt in prompts_list:
         for variant in variants_list:
@@ -411,7 +202,272 @@ def iter_work_items(
             }
 
 
+_EMOJI_RANGES: list[tuple[int, int]] = [
+    (0x1F300, 0x1F5FF),
+    (0x1F600, 0x1F64F),
+    (0x1F680, 0x1F6FF),
+    (0x1F700, 0x1F77F),
+    (0x1F780, 0x1F7FF),
+    (0x1F800, 0x1F8FF),
+    (0x1F900, 0x1F9FF),
+    (0x1FA00, 0x1FAFF),
+    (0x1F1E6, 0x1F1FF),
+    (0x2600, 0x26FF),
+    (0x2700, 0x27BF),
+]
+
+_SCRIPT_RANGES: list[tuple[str, list[tuple[int, int]]]] = [
+    (
+        "Latin",
+        [
+            (0x0041, 0x007A),
+            (0x00C0, 0x00FF),
+            (0x0100, 0x017F),
+            (0x0180, 0x024F),
+            (0x1E00, 0x1EFF),
+            (0x2C60, 0x2C7F),
+            (0xA720, 0xA7FF),
+            (0xAB30, 0xAB6F),
+        ],
+    ),
+    ("Greek", [(0x0370, 0x03FF), (0x1F00, 0x1FFF)]),
+    (
+        "Cyrillic",
+        [
+            (0x0400, 0x04FF),
+            (0x0500, 0x052F),
+            (0x2DE0, 0x2DFF),
+            (0xA640, 0xA69F),
+            (0x1C80, 0x1C8F),
+        ],
+    ),
+    ("Armenian", [(0x0530, 0x058F)]),
+    ("Hebrew", [(0x0590, 0x05FF)]),
+    (
+        "Arabic",
+        [
+            (0x0600, 0x06FF),
+            (0x0750, 0x077F),
+            (0x08A0, 0x08FF),
+            (0xFB50, 0xFDFF),
+            (0xFE70, 0xFEFF),
+        ],
+    ),
+    ("Devanagari", [(0x0900, 0x097F), (0xA8E0, 0xA8FF)]),
+    ("Bengali", [(0x0980, 0x09FF)]),
+    ("Gurmukhi", [(0x0A00, 0x0A7F)]),
+    ("Gujarati", [(0x0A80, 0x0AFF)]),
+    ("Oriya", [(0x0B00, 0x0B7F)]),
+    ("Tamil", [(0x0B80, 0x0BFF)]),
+    ("Telugu", [(0x0C00, 0x0C7F)]),
+    ("Kannada", [(0x0C80, 0x0CFF)]),
+    ("Malayalam", [(0x0D00, 0x0D7F)]),
+    ("Sinhala", [(0x0D80, 0x0DFF)]),
+    ("Thai", [(0x0E00, 0x0E7F)]),
+    ("Lao", [(0x0E80, 0x0EFF)]),
+    ("Tibetan", [(0x0F00, 0x0FFF)]),
+    ("Myanmar", [(0x1000, 0x109F), (0xAA60, 0xAA7F)]),
+    ("Georgian", [(0x10A0, 0x10FF), (0x2D00, 0x2D2F)]),
+    ("Ethiopic", [(0x1200, 0x137F), (0x1380, 0x139F), (0x2D80, 0x2DDF)]),
+    ("Khmer", [(0x1780, 0x17FF), (0x19E0, 0x19FF)]),
+    ("Mongolian", [(0x1800, 0x18AF)]),
+    (
+        "Han",
+        [
+            (0x4E00, 0x9FFF),
+            (0x3400, 0x4DBF),
+            (0xF900, 0xFAFF),
+            (0x20000, 0x2A6DF),
+            (0x2A700, 0x2B73F),
+            (0x2B740, 0x2B81F),
+            (0x2B820, 0x2CEAF),
+        ],
+    ),
+    ("Hiragana", [(0x3040, 0x309F)]),
+    ("Katakana", [(0x30A0, 0x30FF), (0x31F0, 0x31FF), (0xFF66, 0xFF9D)]),
+    ("Bopomofo", [(0x3100, 0x312F), (0x31A0, 0x31BF)]),
+    (
+        "Hangul",
+        [
+            (0x1100, 0x11FF),
+            (0x3130, 0x318F),
+            (0xA960, 0xA97F),
+            (0xAC00, 0xD7AF),
+            (0xD7B0, 0xD7FF),
+        ],
+    ),
+]
+
+
+def _in_ranges(codepoint: int, ranges: list[tuple[int, int]]) -> bool:
+    """Return True if codepoint falls within any (start, end) range."""
+    for start, end in ranges:
+        if start <= codepoint <= end:
+            return True
+    return False
+
+
+@lru_cache(maxsize=4096)
+def _char_script(ch: str) -> str:
+    """Map a single Unicode character to a script label or bucket.
+
+    Buckets:
+    - Emoji: emoji codepoints.
+    - Common: Unicode categories for punctuation, symbols, whitespace/separators,
+      control chars, and digits.
+    - Unknown: not covered by explicit script ranges.
+    """
+    codepoint = ord(ch)
+    if _in_ranges(codepoint, _EMOJI_RANGES):
+        return "Emoji"
+    for script, ranges in _SCRIPT_RANGES:
+        if _in_ranges(codepoint, ranges):
+            return script
+    category = unicodedata.category(ch)
+    if category.startswith(("P", "S", "Z", "C", "N")):
+        return "Common"
+    return "Unknown"
+
+
+def _normalize_token_text(token_text: str) -> str:
+    """Normalize tokenizer markers (▁/Ġ/Ċ) into spaces/newlines for analysis."""
+    if not token_text:
+        return token_text
+    # Common whitespace markers used by tokenizers.
+    return token_text.replace("▁", " ").replace("Ġ", " ").replace("Ċ", "\n")
+
+
+def _token_text_to_script(
+    token_text: str,
+    *,
+    emoji_label: str,
+    common_label: str,
+    unknown_label: str,
+    mixed_label: str,
+) -> str:
+    """Map decoded token text to a script label.
+
+    Rules:
+    - If all non-Common chars belong to one script, return that script.
+    - If multiple scripts appear, return the mixed label.
+    - If only Common chars appear, return the common label.
+    - If no chars appear, return the unknown label.
+    """
+    token_text = _normalize_token_text(token_text)
+
+    counts: dict[str, int] = {}
+    common_count = 0
+    for ch in token_text:
+        script = _char_script(ch)
+        if script == "Common":
+            common_count += 1
+            continue
+        counts[script] = counts.get(script, 0) + 1
+
+    if not counts:
+        if common_count > 0:
+            return common_label
+        return unknown_label
+
+    if len(counts) == 1:
+        only_script = next(iter(counts))
+        return emoji_label if only_script == "Emoji" else only_script
+
+    return mixed_label
+
+
+def token_id_to_script(
+    token_id: int,
+    tokenizer: PreTrainedTokenizerBase,
+    *,
+    special_label: str = "Special",
+    emoji_label: str = "Emoji",
+    common_label: str = "Common",
+    unknown_label: str = "Unknown",
+    mixed_label: str = "Mixed",
+) -> str:
+    """Map a token id to a Unicode script label based on decoded text.
+
+    Labels:
+    - Special: tokenizer special tokens (e.g., <end_of_turn>).
+    - Common: punctuation, symbols, whitespace/separators, control chars, and digits.
+    - Emoji: emoji codepoints.
+    - Mixed: token contains multiple scripts.
+    - Unknown: no characters or unsupported codepoints.
+    """
+    if token_id in tokenizer.all_special_ids:
+        return special_label
+
+    decoded = tokenizer.decode(
+        [token_id],
+        skip_special_tokens=False,
+        clean_up_tokenization_spaces=False,
+    )
+    token_text = (
+        decoded
+        if decoded
+        else tokenizer.convert_ids_to_tokens(token_id, skip_special_tokens=False)
+    )
+    return _token_text_to_script(
+        token_text,
+        emoji_label=emoji_label,
+        common_label=common_label,
+        unknown_label=unknown_label,
+        mixed_label=mixed_label,
+    )
+
+
+def build_token_script_map(
+    tokenizer: PreTrainedTokenizerBase,
+    *,
+    special_label: str = "Special",
+    emoji_label: str = "Emoji",
+    common_label: str = "Common",
+    unknown_label: str = "Unknown",
+    mixed_label: str = "Mixed",
+) -> dict[int, str]:
+    """Map every token id in a tokenizer to a Unicode script label.
+
+    Requires a vocabulary mapping via tokenizer.get_vocab() or tokenizer.vocab.
+
+    Labels:
+    - Special: tokenizer special tokens (e.g., <end_of_turn>).
+    - Common: punctuation, symbols, whitespace/separators, control chars, and digits.
+    - Emoji: emoji codepoints.
+    - Mixed: token contains multiple scripts.
+    - Unknown: no characters or unsupported codepoints.
+    """
+    script_map: dict[int, str] = {}
+    vocab_size = len(tokenizer)
+    special_ids = set(tokenizer.all_special_ids)
+
+    vocab: dict[str, int] | None = None
+    get_vocab = getattr(tokenizer, "get_vocab", None)
+    if callable(get_vocab):
+        vocab = get_vocab()
+    elif isinstance(getattr(tokenizer, "vocab", None), dict):
+        vocab = tokenizer.vocab  # type: ignore[assignment]
+
+    if not vocab:
+        raise ValueError("Tokenizer does not expose a vocabulary mapping.")
+
+    for token_text, token_id in vocab.items():
+        if token_id in special_ids:
+            script_map[token_id] = special_label
+            continue
+        script_map[token_id] = _token_text_to_script(
+            token_text,
+            emoji_label=emoji_label,
+            common_label=common_label,
+            unknown_label=unknown_label,
+            mixed_label=mixed_label,
+        )
+
+    return script_map
+
+
 def iter_batches(items_iter, size: int):
+    """Yield consecutive batches of a given size from an iterator."""
     batch = []
     for item in items_iter:
         batch.append(item)
@@ -427,6 +483,7 @@ def count_work_items(
     variants_list: list[str],
     completed: set[tuple[str, str]] | None = None,
 ) -> int:
+    """Count pending work items for (prompt, variant) pairs."""
     completed = completed or set()
     count = 0
     for prompt in prompts_list:
@@ -439,6 +496,7 @@ def count_work_items(
 
 
 def count_batches(total_items: int, batch_size: int) -> int:
+    """Return the number of batches needed for total_items at batch_size."""
     if batch_size <= 0:
         return 0
     return (total_items + batch_size - 1) // batch_size
