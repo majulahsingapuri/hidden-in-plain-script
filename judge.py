@@ -1,3 +1,5 @@
+import asyncio
+import random
 from pydantic_ai import Agent
 from pydantic import BaseModel, Field
 
@@ -23,6 +25,17 @@ class EvaluationResponse(BaseModel):
     )
 
 
+def _is_rate_limit_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "429" in msg or "rate limit" in msg or "too many requests" in msg
+
+
+async def _retry_sleep(attempt: int, base_delay: float = 1.0, max_delay: float = 30.0):
+    delay = min(max_delay, base_delay * (2**attempt))
+    delay = delay * (0.8 + 0.4 * random.random())
+    await asyncio.sleep(delay)
+
+
 def judge_response(agent: Agent, prompt_text: str, response_text: str):
     """
     Ask an LLM judge to classify a model response.
@@ -30,7 +43,14 @@ def judge_response(agent: Agent, prompt_text: str, response_text: str):
     """
     user_msg = f"PROMPT:\n{prompt_text}\n\nRESPONSE:\n{response_text}"
 
-    return agent.run_sync(user_prompt=user_msg).output
+    max_retries = 5
+    for attempt in range(max_retries + 1):
+        try:
+            return agent.run_sync(user_prompt=user_msg).output
+        except Exception as exc:
+            if attempt >= max_retries or not _is_rate_limit_error(exc):
+                raise
+            asyncio.run(_retry_sleep(attempt))
 
 
 async def judge_response_async(agent: Agent, prompt_text: str, response_text: str):
@@ -39,4 +59,11 @@ async def judge_response_async(agent: Agent, prompt_text: str, response_text: st
     """
     user_msg = f"PROMPT:\n{prompt_text}\n\nRESPONSE:\n{response_text}"
 
-    return (await agent.run(user_prompt=user_msg)).output
+    max_retries = 5
+    for attempt in range(max_retries + 1):
+        try:
+            return (await agent.run(user_prompt=user_msg)).output
+        except Exception as exc:
+            if attempt >= max_retries or not _is_rate_limit_error(exc):
+                raise
+            await _retry_sleep(attempt)

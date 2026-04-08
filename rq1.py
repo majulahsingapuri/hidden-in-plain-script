@@ -139,10 +139,8 @@ def run_experiment(
             max_new_tokens=500,
             do_sample=False,
         )
-        input_lengths = batch_inputs["attention_mask"].sum(dim=1).tolist()
-        generated_ids = [
-            output[int(input_len) :] for output, input_len in zip(outputs, input_lengths)
-        ]
+        input_seq_len = batch_inputs["input_ids"].shape[1]
+        generated_ids = outputs[:, input_seq_len:]
         responses = processor.batch_decode(generated_ids, skip_special_tokens=True)
 
         verdicts = asyncio.run(
