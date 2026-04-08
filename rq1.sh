@@ -6,5 +6,5 @@ python rq1.py \
   --model "google/gemma-3-4b-it" \
   --limit 0 \
   --langs gu hi te ta \
-  --batch-size 16 \
-  --judge-concurrency 4
+  --batch-size 128 \
+  --judge-concurrency 32

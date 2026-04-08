@@ -136,7 +136,7 @@ def run_experiment(
         batch_inputs = {k: v.to(device) for k, v in batch_inputs.items()}
         outputs = model.generate(
             **batch_inputs,
-            max_new_tokens=500,
+            max_new_tokens=300,
             do_sample=False,
         )
         input_seq_len = batch_inputs["input_ids"].shape[1]
