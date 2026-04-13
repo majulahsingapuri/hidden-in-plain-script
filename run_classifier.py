@@ -1,3 +1,21 @@
+"""Inference utilities for SAE-based harmfulness classifier.
+
+Sample CLI usage:
+  python run_classifier.py --model results/rq3/gemma-3-4b-it \
+    --activation assets/gemma-3-4b-it/sae_activations/benign_0-en-17.pt
+
+  python run_classifier.py --model results/rq3/gemma-3-4b-it \
+    --data-dir assets/gemma-3-4b-it --example harmful_0:en
+
+Sample notebook usage:
+  from run_classifier import ClassifierRunner
+  runner = ClassifierRunner(
+      Path("results/rq3/gemma-3-4b-it/classifier.pt"),
+      config_path=Path("results/rq3/gemma-3-4b-it/config.json"),
+  )
+  result = runner.predict_tensor(torch.load(".../benign_0-en-17.pt"))
+"""
+
 import argparse
 import json
 from dataclasses import dataclass
@@ -9,6 +27,7 @@ from torch import nn
 
 
 def resolve_activation_path(data_dir: Path, activation_path: str) -> Path:
+    """Resolve activation path stored in sae_features.json."""
     path = Path(activation_path)
     if path.exists():
         return path
@@ -16,6 +35,7 @@ def resolve_activation_path(data_dir: Path, activation_path: str) -> Path:
 
 
 def apply_top_k(x: torch.Tensor, k: int, mode: str) -> torch.Tensor:
+    """Zero all but top-k features in a 1D tensor."""
     if k <= 0 or k >= x.numel():
         return x
     if mode == "abs":
@@ -31,6 +51,7 @@ def apply_top_k(x: torch.Tensor, k: int, mode: str) -> torch.Tensor:
 
 
 def apply_top_k_batch(x: torch.Tensor, k: int, mode: str) -> torch.Tensor:
+    """Zero all but top-k features per row in a 2D tensor."""
     if k <= 0 or k >= x.size(1):
         return x
     if mode == "abs":
@@ -47,12 +68,14 @@ def apply_top_k_batch(x: torch.Tensor, k: int, mode: str) -> torch.Tensor:
 
 @dataclass
 class Normalizer:
+    """Base class for feature normalization."""
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
 
 @dataclass
 class ZScoreNormalizer(Normalizer):
+    """Per-feature z-score normalization."""
     mean: torch.Tensor
     std: torch.Tensor
 
@@ -62,6 +85,7 @@ class ZScoreNormalizer(Normalizer):
 
 @dataclass
 class L2Normalizer(Normalizer):
+    """L2 normalization per vector."""
     eps: float = 1e-8
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
@@ -69,7 +93,9 @@ class L2Normalizer(Normalizer):
 
 
 class ClassifierRunner:
+    """Load a trained classifier and run inference on activations."""
     def __init__(self, model_path: Path, config_path: Path | None = None):
+        """Create a runner from classifier.pt and optional config.json."""
         self.model_path = model_path
         payload = torch.load(model_path, map_location="cpu")
         config = None
@@ -104,6 +130,7 @@ class ClassifierRunner:
         normalizer_state: dict | None,
         config_normalizer: dict | None,
     ) -> Normalizer | None:
+        """Build a normalizer from checkpoint/config metadata."""
         if config_normalizer and config_normalizer.get("type") == "zscore":
             path = config_normalizer.get("path")
             if path:
@@ -130,6 +157,7 @@ class ClassifierRunner:
         return None
 
     def _prep(self, x: torch.Tensor) -> torch.Tensor:
+        """Normalize and top-k filter a 1D or 2D tensor into [B, D]."""
         if x.dim() == 1:
             x = x.unsqueeze(0)
         if x.dim() != 2 or x.size(1) != self.input_dim:
@@ -149,6 +177,7 @@ class ClassifierRunner:
         return x
 
     def predict_batch_raw(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Return raw batched outputs as tensors (logits/probs/preds)."""
         x = self._prep(x)
         with torch.no_grad():
             logits = self.model(x).squeeze(1)
@@ -157,6 +186,7 @@ class ClassifierRunner:
         return {"logits": logits, "probs": probs, "preds": preds}
 
     def predict_tensor(self, x: torch.Tensor) -> dict[str, Any] | list[dict[str, Any]]:
+        """Return dict (single) or list of dicts (batch) with scalar outputs."""
         outputs = self.predict_batch_raw(x)
         logits = outputs["logits"].tolist()
         probs = outputs["probs"].tolist()
@@ -175,6 +205,7 @@ class ClassifierRunner:
         return results[0] if len(results) == 1 else results
 
     def predict_file(self, path: Path) -> dict[str, Any]:
+        """Load activation .pt file and return prediction dict."""
         vec = torch.load(path, map_location="cpu")
         if not isinstance(vec, torch.Tensor):
             vec = torch.tensor(vec)
@@ -187,6 +218,7 @@ class ClassifierRunner:
 
 
 def load_examples_index(data_dir: Path) -> dict[tuple[str, str], str]:
+    """Build index mapping (prompt_id, variant) -> activation_path."""
     features_path = data_dir / "sae_features.json"
     with open(features_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -204,6 +236,7 @@ def load_examples_index(data_dir: Path) -> dict[tuple[str, str], str]:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI args for batch inference."""
     parser = argparse.ArgumentParser(description="Run inference on a trained classifier.")
     parser.add_argument(
         "--model",
@@ -248,6 +281,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """CLI entrypoint: run inference and emit JSON lines."""
     args = parse_args()
     outputs: list[str] = []
 
