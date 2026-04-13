@@ -1,3 +1,11 @@
+"""Run RQ2: layer-wise token tracing over transliterated prompts.
+
+Example:
+    ```bash
+    python rq2.py -d assets/transliterations.json --model google/gemma-3-4b-it
+    ```
+"""
+
 import argparse
 from json import load, dump
 from tqdm import tqdm
@@ -27,6 +35,18 @@ def run_experiment(
     limit: int = 0,
     batch_size: int = 16,
 ):
+    """Trace token predictions for every prompt variant and save the results.
+
+    Args:
+        data_path: JSON dataset containing transliterated prompt variants.
+        model_name: Hugging Face model name or local path.
+        layers_path: Dotted attribute path to the layer stack inside `LanguageModel`.
+        norm_path: Dotted attribute path to the final norm module.
+        langs: Target language codes used to construct prompt variants.
+        limit: Optional prompt limit. `0` means no limit.
+        batch_size: Number of prompt variants grouped per outer loop batch.
+    """
+
     config = Config()
     print("Config Loaded")
 
@@ -97,6 +117,8 @@ def run_experiment(
 
 
 def main():
+    """Parse CLI arguments and run RQ2."""
+
     parser = argparse.ArgumentParser(description="Run Experiment 1.")
     parser.add_argument(
         "--data",

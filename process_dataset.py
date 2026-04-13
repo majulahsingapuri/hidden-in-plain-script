@@ -1,3 +1,11 @@
+"""Download JailbreakBench prompts and build a transliterated dataset.
+
+Example:
+    ```bash
+    python process_dataset.py -l gu hi te ta --limit 100
+    ```
+"""
+
 from datasets import load_dataset
 from transliterate import main as tranliterate_main
 from pathlib import Path
@@ -7,6 +15,16 @@ from random import shuffle
 
 
 def download_dataset(path: Path, limit: int = None):
+    """Download JailbreakBench behaviors and save them as JSON rows.
+
+    Args:
+        path: Output JSON path.
+        limit: Optional cap on the number of prompts after shuffling.
+
+    Example:
+        >>> # download_dataset(Path("assets/transliterations.json"), limit=50)
+    """
+
     jbb = load_dataset("JailbreakBench/JBB-Behaviors", "behaviors")
 
     harmful_prompts = [
@@ -40,6 +58,13 @@ def download_dataset(path: Path, limit: int = None):
 
 
 def main():
+    """CLI entry point for building the transliterated experiment dataset.
+
+    The script first downloads harmful and benign prompts from JailbreakBench,
+    writes them to the configured output file, and then forwards the same file
+    into `transliterate.main` so language variants are added in place.
+    """
+
     parser = argparse.ArgumentParser(
         description="Transliterate sentences into one or more target languages."
     )

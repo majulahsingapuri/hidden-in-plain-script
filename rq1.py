@@ -1,3 +1,11 @@
+"""Run RQ1: generation plus safety judging over transliterated prompts.
+
+Example:
+    ```bash
+    python rq1.py -d assets/transliterations.json --model google/gemma-3-4b-it -l gu hi te ta
+    ```
+"""
+
 import argparse
 import asyncio
 from json import load, dump
@@ -24,9 +32,20 @@ from utils import (
 async def judge_batch(
     judge: Agent, batch_items: list[dict], responses: list[str], concurrency: int
 ):
+    """Judge a batch of responses with bounded async concurrency.
+
+    Args:
+        judge: Configured judge agent.
+        batch_items: Input prompt metadata for each generated response.
+        responses: Model responses aligned with `batch_items`.
+        concurrency: Maximum number of active judge requests.
+    """
+
     semaphore = asyncio.Semaphore(concurrency)
 
     async def _judge_one(item: dict, response: str):
+        """Judge one prompt-response pair under the shared semaphore."""
+
         async with semaphore:
             return await judge_response_async(judge, item["prompt_en"], response)
 
@@ -47,6 +66,22 @@ def run_experiment(
     output_path: Path | None = None,
     resume: bool = False,
 ):
+    """Run the end-to-end RQ1 pipeline and save judged generations.
+
+    Args:
+        data_path: JSON dataset containing `en` and variant prompt fields.
+        model_name: Hugging Face model name or local path for generation.
+        langs: Target language codes used to build prompt variants.
+        limit: Optional prompt limit. `0` means use the full dataset.
+        batch_size: Number of prompt variants generated per model batch.
+        judge_concurrency: Maximum number of concurrent judge requests.
+        output_path: Optional fixed output path. A timestamped path is used when omitted.
+        resume: When `True`, skip prompt/variant pairs already present in `output_path`.
+
+    Example:
+        >>> # run_experiment(Path("assets/transliterations.json"), "google/gemma-3-4b-it", ["gu", "hi"])
+    """
+
     config = Config()
     print("Config Loaded")
 
@@ -174,6 +209,8 @@ def run_experiment(
 
 
 def main():
+    """Parse CLI arguments and run RQ1."""
+
     parser = argparse.ArgumentParser(description="Run Experiment 1.")
     parser.add_argument(
         "--data",

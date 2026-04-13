@@ -27,7 +27,11 @@ from torch import nn
 
 
 def resolve_activation_path(data_dir: Path, activation_path: str) -> Path:
-    """Resolve activation path stored in sae_features.json."""
+    """Resolve an activation path recorded in `sae_features.json`.
+
+    Example:
+        >>> # resolve_activation_path(Path("assets/gemma-3-4b-it"), "benign_0-en-17.pt")
+    """
     path = Path(activation_path)
     if path.exists():
         return path
@@ -35,7 +39,7 @@ def resolve_activation_path(data_dir: Path, activation_path: str) -> Path:
 
 
 def apply_top_k(x: torch.Tensor, k: int, mode: str) -> torch.Tensor:
-    """Zero all but top-k features in a 1D tensor."""
+    """Keep only the top-k features in a single activation vector."""
     if k <= 0 or k >= x.numel():
         return x
     if mode == "abs":
@@ -51,7 +55,7 @@ def apply_top_k(x: torch.Tensor, k: int, mode: str) -> torch.Tensor:
 
 
 def apply_top_k_batch(x: torch.Tensor, k: int, mode: str) -> torch.Tensor:
-    """Zero all but top-k features per row in a 2D tensor."""
+    """Keep only the top-k features for each row in a 2D batch tensor."""
     if k <= 0 or k >= x.size(1):
         return x
     if mode == "abs":
@@ -69,7 +73,10 @@ def apply_top_k_batch(x: torch.Tensor, k: int, mode: str) -> torch.Tensor:
 @dataclass
 class Normalizer:
     """Base class for feature normalization."""
+
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        """Normalize one activation vector."""
+
         raise NotImplementedError
 
 
@@ -80,6 +87,8 @@ class ZScoreNormalizer(Normalizer):
     std: torch.Tensor
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply z-score normalization using stored statistics."""
+
         return (x - self.mean) / self.std
 
 
@@ -89,13 +98,22 @@ class L2Normalizer(Normalizer):
     eps: float = 1e-8
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        """Scale a vector to unit L2 norm."""
+
         return x / (x.norm(p=2) + self.eps)
 
 
 class ClassifierRunner:
-    """Load a trained classifier and run inference on activations."""
+    """Load a trained classifier and run inference on activations.
+
+    Example:
+        >>> from pathlib import Path
+        >>> runner = ClassifierRunner(Path("results/rq3/gemma-3-4b-it/classifier.pt"))
+        >>> # runner.predict_file(Path("assets/gemma-3-4b-it/sae_activations/benign_0-en-17.pt"))
+    """
+
     def __init__(self, model_path: Path, config_path: Path | None = None):
-        """Create a runner from classifier.pt and optional config.json."""
+        """Create a runner from `classifier.pt` and optional `config.json`."""
         self.model_path = model_path
         payload = torch.load(model_path, map_location="cpu")
         config = None
@@ -130,7 +148,7 @@ class ClassifierRunner:
         normalizer_state: dict | None,
         config_normalizer: dict | None,
     ) -> Normalizer | None:
-        """Build a normalizer from checkpoint/config metadata."""
+        """Build a normalizer from checkpoint and config metadata."""
         if config_normalizer and config_normalizer.get("type") == "zscore":
             path = config_normalizer.get("path")
             if path:
@@ -157,7 +175,7 @@ class ClassifierRunner:
         return None
 
     def _prep(self, x: torch.Tensor) -> torch.Tensor:
-        """Normalize and top-k filter a 1D or 2D tensor into [B, D]."""
+        """Normalize and top-k filter a 1D or 2D tensor into `[B, D]`."""
         if x.dim() == 1:
             x = x.unsqueeze(0)
         if x.dim() != 2 or x.size(1) != self.input_dim:
@@ -177,7 +195,10 @@ class ClassifierRunner:
         return x
 
     def predict_batch_raw(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
-        """Return raw batched outputs as tensors (logits/probs/preds)."""
+        """Return raw batched outputs as tensors.
+
+        The returned dictionary contains `logits`, `probs`, and `preds`.
+        """
         x = self._prep(x)
         with torch.no_grad():
             logits = self.model(x).squeeze(1)
@@ -186,7 +207,7 @@ class ClassifierRunner:
         return {"logits": logits, "probs": probs, "preds": preds}
 
     def predict_tensor(self, x: torch.Tensor) -> dict[str, Any] | list[dict[str, Any]]:
-        """Return dict (single) or list of dicts (batch) with scalar outputs."""
+        """Return human-friendly scalar predictions for one tensor or a batch."""
         outputs = self.predict_batch_raw(x)
         logits = outputs["logits"].tolist()
         probs = outputs["probs"].tolist()
@@ -205,7 +226,7 @@ class ClassifierRunner:
         return results[0] if len(results) == 1 else results
 
     def predict_file(self, path: Path) -> dict[str, Any]:
-        """Load activation .pt file and return prediction dict."""
+        """Load one activation `.pt` file and return its prediction dictionary."""
         vec = torch.load(path, map_location="cpu")
         if not isinstance(vec, torch.Tensor):
             vec = torch.tensor(vec)
@@ -218,7 +239,7 @@ class ClassifierRunner:
 
 
 def load_examples_index(data_dir: Path) -> dict[tuple[str, str], str]:
-    """Build index mapping (prompt_id, variant) -> activation_path."""
+    """Build an index from `(prompt_id, variant)` to activation path."""
     features_path = data_dir / "sae_features.json"
     with open(features_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -236,7 +257,7 @@ def load_examples_index(data_dir: Path) -> dict[tuple[str, str], str]:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse CLI args for batch inference."""
+    """Parse CLI arguments for batch classifier inference."""
     parser = argparse.ArgumentParser(description="Run inference on a trained classifier.")
     parser.add_argument(
         "--model",
@@ -281,7 +302,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """CLI entrypoint: run inference and emit JSON lines."""
+    """Run the classifier CLI and emit JSON lines.
+
+    Example:
+        ```bash
+        python run_classifier.py --model results/rq3/gemma-3-4b-it --example harmful_0:en --data-dir assets/gemma-3-4b-it
+        ```
+    """
     args = parse_args()
     outputs: list[str] = []
 

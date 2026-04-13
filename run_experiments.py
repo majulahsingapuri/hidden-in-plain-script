@@ -1,3 +1,11 @@
+"""Random-search sweep runner for classifier training.
+
+Example:
+    ```bash
+    python run_experiments.py --data-dir assets/gemma-3-4b-it --trials 20
+    ```
+"""
+
 import argparse
 import json
 import math
@@ -10,6 +18,8 @@ from typing import Any
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the sweep runner."""
+
     parser = argparse.ArgumentParser(
         description="Random-search sweep for train_classifier.py."
     )
@@ -83,6 +93,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def ensure_output_dir(path: Path | None) -> Path:
+    """Create or infer the sweep output directory."""
+
     if path is None:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         path = Path("results") / "rq3" / "sweeps" / timestamp
@@ -91,10 +103,14 @@ def ensure_output_dir(path: Path | None) -> Path:
 
 
 def log_uniform(rng: random.Random, low: float, high: float) -> float:
+    """Sample a float uniformly in log space."""
+
     return 10 ** rng.uniform(math.log10(low), math.log10(high))
 
 
 def sample_config(rng: random.Random) -> dict[str, Any]:
+    """Sample one candidate hyperparameter configuration."""
+
     return {
         "lr": log_uniform(rng, 1e-4, 5e-3),
         "weight_decay": log_uniform(rng, 1e-6, 1e-2),
@@ -106,6 +122,8 @@ def sample_config(rng: random.Random) -> dict[str, Any]:
 
 
 def metric_from_metrics(metrics: dict[str, Any], metric_name: str) -> float | None:
+    """Extract the optimization metric from a saved `metrics.json` payload."""
+
     metric_name = metric_name.lower()
     if metric_name == "val_f1":
         return metrics.get("val", {}).get("f1")
@@ -117,6 +135,8 @@ def metric_from_metrics(metrics: dict[str, Any], metric_name: str) -> float | No
 
 
 def save_json(path: Path, payload: Any) -> None:
+    """Write a JSON file with UTF-8 encoding and stable formatting."""
+
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False, default=str)
 
@@ -127,6 +147,8 @@ def build_cmd(
     model_name: str,
     config: dict[str, Any],
 ) -> list[str]:
+    """Build the `train_classifier.py` command for one sweep trial."""
+
     cmd = [
         sys.executable,
         "train_classifier.py",
@@ -163,6 +185,8 @@ def build_cmd(
 
 
 def main() -> None:
+    """Run the hyperparameter sweep and continuously persist sweep results."""
+
     args = parse_args()
     output_dir = ensure_output_dir(args.output_dir)
     rng = random.Random(args.seed)

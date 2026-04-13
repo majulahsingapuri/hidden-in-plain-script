@@ -1,3 +1,11 @@
+"""Shared utilities for tracing, batching, and token script analysis.
+
+Example:
+    >>> from utils import build_variants
+    >>> build_variants(["gu", "hi"])
+    ['en', 'gu', 'gu_en', 'en_gu', 'hi', 'hi_en', 'en_hi']
+"""
+
 import unicodedata
 from functools import lru_cache
 from typing import Union
@@ -8,7 +16,15 @@ from transformers import PreTrainedTokenizerBase
 
 
 class ResourceMonitor:
+    """Collect lightweight CPU, RAM, GPU, and VRAM utilization samples."""
+
     def __init__(self, gpu_index: int = 0):
+        """Initialize optional psutil and NVML backends.
+
+        Args:
+            gpu_index: GPU index to observe when NVML is available.
+        """
+
         self._psutil = None
         self._pynvml = None
         self._gpu_handle = None
@@ -42,6 +58,8 @@ class ResourceMonitor:
             self._nvml_init = False
 
     def sample(self) -> dict[str, float]:
+        """Return the latest utilization sample as percentages."""
+
         metrics: dict[str, float] = {}
         if self._psutil is not None:
             metrics["cpu"] = float(self._psutil.cpu_percent(interval=None))
@@ -54,6 +72,8 @@ class ResourceMonitor:
         return metrics
 
     def tqdm_postfix(self) -> dict[str, str] | None:
+        """Format a utilization snapshot for `tqdm.set_postfix`."""
+
         metrics = self.sample()
         if not metrics:
             return None
@@ -69,6 +89,8 @@ class ResourceMonitor:
         return postfix
 
     def close(self):
+        """Release NVML resources if GPU monitoring was initialized."""
+
         if self._pynvml is not None and self._nvml_init:
             try:
                 self._pynvml.nvmlShutdown()
@@ -77,9 +99,13 @@ class ResourceMonitor:
             self._nvml_init = False
 
     def __enter__(self):
+        """Return `self` so the monitor can be used as a context manager."""
+
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        """Close the monitor when leaving a context manager block."""
+
         self.close()
 
 
@@ -121,7 +147,19 @@ def generate_trace(
     norm_path: str = "model.language_model.norm",
     return_max_probs: bool = False,
 ) -> list[dict[str, Union[list[list[str]], torch.Tensor]]]:
-    """Run a single prompt through Gemma and return the internal representations."""
+    """Trace top token predictions at every layer for one or more prompts.
+
+    Args:
+        model: `nnsight.LanguageModel` wrapper around the target model.
+        prompt_texts: One prompt or a list of prompts to trace.
+        layers_path: Dotted path to the transformer layer list.
+        norm_path: Dotted path to the final norm module.
+        return_max_probs: Whether to include per-layer max softmax probabilities.
+
+    Returns:
+        A list of dictionaries containing prompt text, decoded top tokens, token IDs,
+        and optionally max probabilities.
+    """
 
     layers = resolve_attr_path(model, layers_path)
     norm = resolve_attr_path(model, norm_path)
@@ -467,7 +505,12 @@ def build_token_script_map(
 
 
 def iter_batches(items_iter, size: int):
-    """Yield consecutive batches of a given size from an iterator."""
+    """Yield consecutive batches of a given size from an iterator.
+
+    Example:
+        >>> list(iter_batches(iter([1, 2, 3, 4, 5]), 2))
+        [[1, 2], [3, 4], [5]]
+    """
     batch = []
     for item in items_iter:
         batch.append(item)

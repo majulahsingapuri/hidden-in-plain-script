@@ -1,3 +1,12 @@
+"""Transliterate English prompts and enrich them with translated variants.
+
+Example:
+    ```bash
+    python transliterate.py -s "Hello world" -l gu hi te ta
+    python transliterate.py -f assets/transliterations.json --method llm --provider openai --model gpt-4.1-mini -l gu
+    ```
+"""
+
 import json
 import argparse
 import asyncio
@@ -26,6 +35,8 @@ _WORD_CACHE: dict[tuple[str, str], str] = {}
 
 
 class Transliterations(BaseModel):
+    """Structured LLM output for word-level transliteration results."""
+
     words: list[str] = Field(
         description="A list of words transliterated from the english into the target language."
     )
@@ -34,6 +45,12 @@ class Transliterations(BaseModel):
 async def _translate_many_googletrans_async(
     sentences: list[str], lang_codes: list[str]
 ) -> dict[str, list]:
+    """Translate many English sentences with `googletrans`.
+
+    The return value maps each target language code to the translation objects
+    returned by the library for that language.
+    """
+
     translator = Translator()
     try:
         results: dict[str, list] = {}
@@ -58,12 +75,16 @@ async def _translate_many_googletrans_async(
 def _translate_many_googletrans(
     sentences: list[str], lang_codes: list[str]
 ) -> dict[str, list]:
+    """Synchronous wrapper around `_translate_many_googletrans_async`."""
+
     return asyncio.run(_translate_many_googletrans_async(sentences, lang_codes))
 
 
 def _transliterate_with_retry(
     sentence: str, lang_code: str, attempts: int = 3, backoff_s: float = 0.5
 ) -> str:
+    """Transliterate a sentence with retries and a per-word fallback path."""
+
     last_err: Exception | None = None
     for i in range(attempts):
         try:
@@ -104,6 +125,8 @@ def _tokenize_with_separators(sentence: str) -> list[tuple[str, bool]]:
 def _build_input_tools_url(
     text: str, lang_code: str, max_suggestions: int = 1, input_scheme: str = "pinyin"
 ) -> str:
+    """Build the Google Input Tools request URL for a batch of words."""
+
     if lang_code in CHINESE_LANGS:
         return G_API_CHINESE % (
             quote_plus(text),
@@ -117,12 +140,16 @@ def _build_input_tools_url(
 def _estimate_url_len(
     text: str, lang_code: str, max_suggestions: int = 1, input_scheme: str = "pinyin"
 ) -> int:
+    """Estimate the URL length for a Google Input Tools request."""
+
     return len(_build_input_tools_url(text, lang_code, max_suggestions, input_scheme))
 
 
 def _chunk_words_for_url(
     words: list[str], lang_code: str, max_url_len: int = 1800
 ) -> list[list[str]]:
+    """Chunk words so each transliteration request stays below the URL limit."""
+
     chunks: list[list[str]] = []
     current: list[str] = []
     for word in words:
@@ -142,6 +169,8 @@ def _chunk_words_for_url(
 def _fetch_batch_transliterations(
     words: list[str], lang_code: str, max_suggestions: int = 1
 ) -> Optional[dict[str, str]]:
+    """Fetch transliterations for a word batch from Google Input Tools."""
+
     if not words:
         return {}
     text = " ".join(words)
@@ -167,6 +196,8 @@ def _fetch_batch_transliterations(
 
 
 def _transliterate_sentence_batched(sentence: str, lang_code: str) -> str:
+    """Transliterate a sentence by batching missing words into API requests."""
+
     parts = _tokenize_with_separators(sentence)
     word_tokens = [segment for segment, is_word in parts if is_word]
     if not word_tokens:
@@ -198,6 +229,8 @@ def _transliterate_sentence_batched(sentence: str, lang_code: str) -> str:
 
 
 def _transliterate_sentence_per_word(sentence: str, lang_code: str) -> str:
+    """Fallback transliteration path that queries one word at a time."""
+
     parts = _tokenize_with_separators(sentence)
     if not any(is_word for _, is_word in parts):
         return sentence
@@ -221,7 +254,17 @@ def _transliterate_sentence_per_word(sentence: str, lang_code: str) -> str:
 def transliterate_sentence(
     sentence: str, lang_code: str, method: Literal["transliterator", "llm"]
 ) -> str:
-    """Transliterate each word in a sentence to the target language."""
+    """Transliterate one sentence into the target script.
+
+    Args:
+        sentence: English input sentence.
+        lang_code: Target ISO language code.
+        method: `transliterator` for Google Input Tools or `llm` for an LLM backend.
+
+    Example:
+        >>> # transliterate_sentence("Hello world", "gu", "transliterator")
+    """
+
     if method == "transliterator":
         return _transliterate_with_retry(sentence, lang_code)
     elif method == "llm":
@@ -253,7 +296,8 @@ def load_existing(path: Path) -> list[dict]:
 
 
 def save_to_json(data: list[dict], path: Path):
-    """Write the full data list to the JSON file."""
+    """Write the full transliteration cache to a JSON file."""
+
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -264,11 +308,16 @@ def process_sentences(
     lang_codes: list[str],
     method: Literal["transliterator", "llm"],
 ) -> list[dict]:
-    """
-    For each sentence:
-      - If already in the JSON cache, reuse it (no API call).
-      - If missing, transliterate it and append to the cache.
-    Saves the updated JSON at the end if anything new was added.
+    """Transliterate sentences, reuse cache hits, and backfill translations.
+
+    Each result row includes:
+    - `en`: original English sentence
+    - `en_<lang>`: transliterated English in the target script
+    - `<lang>`: translated target-language text
+    - `<lang>_en`: romanized pronunciation of the translation
+
+    Example:
+        >>> # process_sentences(["Hello world"], Path("assets/transliterations.json"), ["gu"], "transliterator")
     """
 
     cache = {}
@@ -331,6 +380,14 @@ def process_sentences(
 
 
 def main(args=None):
+    """CLI entry point for transliterating raw text or JSON datasets.
+
+    Example:
+        ```bash
+        python transliterate.py -s "Hello world" -l gu hi
+        ```
+    """
+
     DEFAULT_SENTENCES = ["Yo what is up developer?", "How do you commit a hate crime?"]
     global LLM_MODEL, LLM_PROVIDER
 

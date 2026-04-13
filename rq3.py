@@ -17,6 +17,12 @@ from utils import resolve_attr_path, ResourceMonitor
 
 
 def load_model(model_name: str = "google/gemma-3-4b-it") -> LanguageModel:
+    """Load the traced language model used for SAE feature extraction.
+
+    Example:
+        >>> # model = load_model("google/gemma-3-4b-it")
+    """
+
     return LanguageModel(model_name, device_map="auto", dispatch=True)
 
 
@@ -25,6 +31,14 @@ def load_sae(
     sae_id: str = "layer_17_width_262k_l0_small",
     device: str = "cuda",
 ) -> tuple[SAE, dict]:
+    """Load a pretrained SAE from SAE Lens.
+
+    Args:
+        release: SAE release collection name.
+        sae_id: Specific SAE identifier inside the release.
+        device: Device string understood by SAE Lens.
+    """
+
     sae, _, _ = SAE.from_pretrained(release=release, sae_id=sae_id, device=device)
     return sae
 
@@ -36,6 +50,8 @@ def extract_hidden_states(
     layers_path: str,
     norm_path: str,
 ) -> tuple[list[str], torch.Tensor]:
+    """Trace one prompt and return hidden states from the selected layer."""
+
     layers = resolve_attr_path(model, layers_path)
     norm = resolve_attr_path(model, norm_path)
     with model.trace() as tracer:
@@ -48,6 +64,8 @@ def extract_hidden_states(
 
 
 def decompose_features(sae: SAE, hidden_states: torch.Tensor) -> torch.Tensor:
+    """Encode hidden states into sparse SAE feature activations."""
+
     with torch.no_grad():
         feature_acts = sae.encode(hidden_states)
     return feature_acts.squeeze(0)
@@ -61,6 +79,12 @@ def sae_features(
     layers_path: str,
     norm_path: str,
 ) -> torch.Tensor:
+    """Return one mean-pooled SAE feature vector for a prompt.
+
+    The traced hidden states are encoded with the SAE and then averaged across
+    token positions so downstream classifiers can consume a single vector.
+    """
+
     hidden_states = extract_hidden_states(
         model,
         prompt_text,
@@ -91,6 +115,8 @@ def load_progress(output_path: Path) -> list[dict]:
 
 
 def save_progress(output_path: Path, progress: list[dict]):
+    """Persist incremental RQ3 progress to disk as JSON."""
+
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(progress, f, ensure_ascii=False, indent=2)
 
@@ -98,6 +124,8 @@ def save_progress(output_path: Path, progress: list[dict]):
 def build_done_sets(
     progress: list[dict],
 ) -> tuple[set[tuple[str, str, int]], set[tuple[str, str]]]:
+    """Build lookup sets for already-processed prompt variants."""
+
     done_with_layer = set()
     done_no_layer = set()
     for entry in progress:
@@ -120,6 +148,8 @@ def save_activation(
     target_layer: int,
     activations: torch.Tensor,
 ) -> Path:
+    """Save one activation vector and return the created path."""
+
     output_dir.mkdir(parents=True, exist_ok=True)
     filename = f"{prompt_id}-{variant}-{target_layer}.pt"
     out_path = output_dir / filename
@@ -140,6 +170,24 @@ def run_batch(
     fresh: bool = False,
     langs: list[str] = [],
 ):
+    """Run SAE feature extraction over every requested prompt variant.
+
+    Args:
+        data_path: Dataset containing transliterated prompt variants.
+        output_path: JSON index that records saved activation files.
+        model_name: Hugging Face model name or local path.
+        sae_release: SAE release collection name.
+        sae_id: SAE identifier inside the release.
+        limit: Optional prompt limit. `0` means no limit.
+        target_layer: Transformer layer to trace before SAE encoding.
+        layers_path: Dotted path to the transformer layer list.
+        norm_path: Dotted path to the final norm module.
+        fresh: Delete existing progress JSON before starting.
+        langs: Target language codes used to construct prompt variants.
+
+    Example:
+        >>> # run_batch(Path("assets/transliterations.json"), Path("assets/gemma-3-4b-it/sae_features.json"), "google/gemma-3-4b-it", "gemma-scope-2-4b-it-res-all", "layer_17_width_262k_l0_small")
+    """
 
     variants = ["en"] + [
         version for lang in langs for version in [lang, f"{lang}_en", f"en_{lang}"]
@@ -206,6 +254,8 @@ def run_batch(
 
 
 def main():
+    """Parse CLI arguments and run RQ3."""
+
     parser = argparse.ArgumentParser(
         description="SAE feature decomposition over transliterations."
     )

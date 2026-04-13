@@ -1,3 +1,11 @@
+"""Train a linear probe on SAE activations.
+
+Example:
+    ```bash
+    python train_classifier.py --data-dir assets/gemma-3-4b-it --model-name gemma-3-4b-it
+    ```
+"""
+
 import argparse
 import json
 import logging
@@ -15,6 +23,8 @@ from tqdm import tqdm
 
 @dataclass
 class Example:
+    """Metadata for one activation example used during classifier training."""
+
     prompt_id: str
     variant: str
     target_layer: int
@@ -23,6 +33,8 @@ class Example:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for probe training."""
+
     parser = argparse.ArgumentParser(
         description="Train a linear probe on SAE activations to detect harmful prompts."
     )
@@ -143,6 +155,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_activation_path(data_dir: Path, activation_path: str) -> Path:
+    """Resolve an activation path relative to the data directory if needed."""
+
     path = Path(activation_path)
     if path.exists():
         return path
@@ -151,6 +165,8 @@ def resolve_activation_path(data_dir: Path, activation_path: str) -> Path:
 
 
 def label_from_prompt_id(prompt_id: str) -> int:
+    """Infer the binary label from the prompt ID prefix."""
+
     if prompt_id.startswith("harmful_"):
         return 1
     if prompt_id.startswith("benign_"):
@@ -161,6 +177,12 @@ def label_from_prompt_id(prompt_id: str) -> int:
 def load_examples(
     data_dir: Path, target_layer: int | None = None, max_items: int | None = None
 ) -> list[Example]:
+    """Load activation metadata rows from `sae_features.json`.
+
+    Example:
+        >>> # examples = load_examples(Path("assets/gemma-3-4b-it"))
+    """
+
     features_path = data_dir / "sae_features.json"
     logging.info("Loading features from %s", features_path)
     with open(features_path, "r", encoding="utf-8") as f:
@@ -199,6 +221,8 @@ def load_examples(
 def stratified_split(
     examples: list[Example], seed: int
 ) -> tuple[list[int], list[int], list[int]]:
+    """Create reproducible train/validation/test splits per class label."""
+
     label_to_indices: dict[int, list[int]] = {0: [], 1: []}
     for idx, ex in enumerate(examples):
         label_to_indices[ex.label].append(idx)
@@ -232,6 +256,8 @@ def stratified_split(
 
 
 class ActivationDataset(Dataset):
+    """PyTorch dataset that loads activation vectors on demand."""
+
     def __init__(
         self,
         data_dir: Path,
@@ -241,6 +267,8 @@ class ActivationDataset(Dataset):
         top_k: int | None = None,
         top_k_mode: str = "abs",
     ):
+        """Store activation metadata and preprocessing settings."""
+
         self.data_dir = data_dir
         self.examples = examples
         self.indices = indices
@@ -249,9 +277,13 @@ class ActivationDataset(Dataset):
         self.top_k_mode = top_k_mode
 
     def __len__(self) -> int:
+        """Return the number of examples in this split."""
+
         return len(self.indices)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+        """Load, normalize, sparsify, and label one activation vector."""
+
         ex = self.examples[self.indices[idx]]
         path = resolve_activation_path(self.data_dir, ex.activation_path)
         if not path.exists():
@@ -272,33 +304,53 @@ class ActivationDataset(Dataset):
 def collate_batch(
     batch: list[tuple[torch.Tensor, int]],
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Collate activation vectors and labels into tensors for a `DataLoader`."""
+
     xs, ys = zip(*batch)
     return torch.stack(xs, dim=0), torch.tensor(ys, dtype=torch.float32)
 
 
 class Normalizer:
+    """Base interface for activation normalizers."""
+
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        """Normalize one activation vector."""
+
         raise NotImplementedError
 
 
 class ZScoreNormalizer(Normalizer):
+    """Per-feature z-score normalization using saved train-set statistics."""
+
     def __init__(self, mean: torch.Tensor, std: torch.Tensor):
+        """Store the mean and standard deviation tensors."""
+
         self.mean = mean
         self.std = std
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply z-score normalization to one vector."""
+
         return (x - self.mean) / self.std
 
 
 class L2Normalizer(Normalizer):
+    """Normalize each vector to unit L2 norm."""
+
     def __init__(self, eps: float = 1e-8):
+        """Store the epsilon used to avoid division by zero."""
+
         self.eps = eps
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply L2 normalization to one vector."""
+
         return x / (x.norm(p=2) + self.eps)
 
 
 def apply_top_k(x: torch.Tensor, k: int, mode: str) -> torch.Tensor:
+    """Keep only the top-k features in a single activation vector."""
+
     if k <= 0 or k >= x.numel():
         return x
     if mode == "abs":
@@ -318,6 +370,8 @@ def compute_zscore_stats(
     batch_size: int,
     num_workers: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute per-feature mean and standard deviation for a dataset."""
+
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -349,6 +403,8 @@ def compute_zscore_stats(
 def compute_metrics(
     y_true: list[int], y_prob: list[float], threshold: float
 ) -> dict[str, float]:
+    """Compute classification metrics from probabilities and a threshold."""
+
     preds = [1 if p >= threshold else 0 for p in y_prob]
     tp = sum(1 for y, p in zip(y_true, preds) if y == 1 and p == 1)
     tn = sum(1 for y, p in zip(y_true, preds) if y == 0 and p == 0)
@@ -383,6 +439,8 @@ def compute_metrics(
 def collect_logits(
     model: nn.Module, loader: DataLoader, device: torch.device, desc: str | None = None
 ) -> tuple[list[int], list[float]]:
+    """Run the model over a loader and collect labels plus raw logits."""
+
     model.eval()
     y_true: list[int] = []
     y_logits: list[float] = []
@@ -400,6 +458,8 @@ def collect_logits(
 
 
 def logits_to_probs(logits: list[float], temperature: float = 1.0) -> list[float]:
+    """Convert logits to sigmoid probabilities with optional temperature scaling."""
+
     logits_t = torch.tensor(logits, dtype=torch.float32) / float(temperature)
     probs = torch.sigmoid(logits_t).tolist()
     return [float(p) for p in probs]
@@ -408,6 +468,8 @@ def logits_to_probs(logits: list[float], temperature: float = 1.0) -> list[float
 def compute_bce_loss(
     y_true: list[int], logits: list[float], temperature: float = 1.0
 ) -> float:
+    """Compute binary cross-entropy loss from Python lists of labels and logits."""
+
     if not y_true:
         return 0.0
     logits_t = torch.tensor(logits, dtype=torch.float32) / float(temperature)
@@ -417,6 +479,8 @@ def compute_bce_loss(
 
 
 def fit_temperature(y_true: list[int], logits: list[float]) -> float:
+    """Fit a scalar temperature on validation logits using LBFGS."""
+
     if len(set(y_true)) < 2:
         return 1.0
     logits_t = torch.tensor(logits, dtype=torch.float32)
@@ -425,6 +489,8 @@ def fit_temperature(y_true: list[int], logits: list[float]) -> float:
     optimizer = torch.optim.LBFGS([log_t], lr=0.1, max_iter=50)
 
     def closure():
+        """LBFGS closure that evaluates calibration loss for the current temperature."""
+
         optimizer.zero_grad()
         temperature = torch.exp(log_t)
         loss = nn.BCEWithLogitsLoss()(logits_t / temperature, labels_t)
@@ -437,6 +503,8 @@ def fit_temperature(y_true: list[int], logits: list[float]) -> float:
 
 
 def tune_threshold(y_true: list[int], y_prob: list[float]) -> float:
+    """Choose the threshold in `[0, 1]` that maximizes F1 on validation data."""
+
     best_thresh = 0.5
     best_f1 = -1.0
     for i in range(0, 101):
@@ -456,6 +524,8 @@ def train_epoch(
     desc: str | None = None,
     max_grad_norm: float = 0.0,
 ) -> float:
+    """Run one training epoch and return the average batch loss."""
+
     model.train()
     loss_fn = nn.BCEWithLogitsLoss()
     total_loss = 0.0
@@ -479,17 +549,29 @@ def train_epoch(
 
 
 def make_output_dir(output_root: Path, model_name: str) -> Path:
+    """Create the training output directory for a model run."""
+
     out_dir = output_root / model_name
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir
 
 
 def save_json(path: Path, payload: Any):
+    """Write JSON with UTF-8 encoding and stable indentation."""
+
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False, default=str)
 
 
 def main() -> None:
+    """Run classifier training from the command line.
+
+    Example:
+        ```bash
+        python train_classifier.py --data-dir assets/gemma-3-4b-it --epochs 20 --batch-size 128
+        ```
+    """
+
     args = parse_args()
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper(), logging.INFO),
