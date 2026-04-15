@@ -17,6 +17,18 @@ Research code for studying how LLM safety behavior changes when English prompts 
 - `assets/`: transliteration caches and SAE activation artifacts.
 - `results/`: experiment outputs, trained probes, metrics, and splits.
 
+## Documentation
+
+If you are starting from scratch, read these in order:
+
+1. `docs/intro.md`
+2. `docs/getting-started.md`
+3. `docs/data-model.md`
+4. `docs/workflows/overview.md`
+5. `docs/workflows/classifier.md`
+
+The `docs/` tree is formatted for Docusaurus and mirrors the main workflows plus per-module references.
+
 ## Setup
 
 Python `3.14` is required by `pyproject.toml`.
@@ -220,6 +232,8 @@ The repo includes wrappers with the same core settings used in the paper workflo
 ./rq3.sh
 ```
 
+Use these when you want the checked-in defaults instead of spelling out the full Python CLI flags yourself.
+
 ## Results Layout
 
 - `results/rq1/`: model generations plus judge labels
@@ -227,6 +241,8 @@ The repo includes wrappers with the same core settings used in the paper workflo
 - `results/rq3/`: trained classifiers, metrics, splits, and sweeps
 
 ## Notebooks
+
+The repository also includes exploratory notebooks:
 
 - `logit_lens_transliteration.ipynb`
 - `rq1_simple.ipynb`

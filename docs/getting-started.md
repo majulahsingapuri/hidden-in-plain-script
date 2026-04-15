@@ -68,6 +68,25 @@ python rq1.py \
   -l gu hi te ta
 ```
 
+## Shortcut scripts
+
+If you want the checked-in experiment defaults, use the shell wrappers:
+
+```bash
+./rq1.sh
+./rq2.sh
+./rq3.sh
+```
+
+## Notebooks
+
+The repository also includes analysis notebooks:
+
+- `logit_lens_transliteration.ipynb`
+- `rq1_simple.ipynb`
+- `rq1_analysis_deep.ipynb`
+- `rq2.ipynb`
+
 ## Suggested reading order
 
 1. [Data Model](./data-model.md)

@@ -23,6 +23,8 @@ The repository supports four main tasks:
 - `train_classifier.py`: train a linear probe.
 - `run_classifier.py`: run inference with a trained probe.
 - `run_experiments.py`: sweep classifier hyperparameters.
+- `rq1.sh`, `rq2.sh`, `rq3.sh`: shell wrappers for the main experiment runs.
+- notebooks: exploratory analysis and logit-lens inspection.
 - `assets/`: cached transliterations and activation artifacts.
 - `results/`: experiment outputs and trained classifier artifacts.
 
