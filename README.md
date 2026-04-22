@@ -2,6 +2,19 @@
 
 Research code for studying how LLM safety behavior changes when English prompts are transliterated into non-Latin scripts. The repo builds transliterated variants of JailbreakBench prompts, runs model evaluations, traces internal token predictions, extracts SAE features, and trains a linear probe over those features.
 
+## Results Summary
+
+The checked-in results show a clear safety shift once prompts move away from plain English. Gemma 3 4B IT was evaluated on 2,600 judged responses covering 100 harmful and 100 benign prompts across 13 variants.
+
+- For harmful prompts, the English baseline produced 16.0% judged-harmful responses, compared with 44.8% for native-script translations and 59.0% for English-to-script transliterations.
+- Refusal on harmful prompts dropped from 84.0% in English to 69.2% for English-to-script transliterations and 53.8% for script-to-English variants.
+- Benign prompts stayed mostly non-harmful, but script-to-English variants were frequently gibberish (83.2%), and English-to-script variants also raised gibberish substantially (30.8% vs 3.0% in English).
+- The SAE probe trained on RQ3 activations reached 81.3% test accuracy, 0.822 test F1, and 0.868 test ROC-AUC.
+
+![Response composition summary across English, native-script, and transliterated prompt groups](images/script-judgement-breakdown.png)
+
+The figure above summarizes the non-gibberish response composition across the four comparison groups and shows the same pattern: English-to-script transliterations increase jailbreak-like behavior on harmful prompts, while script-to-English variants often degrade into incoherent output.
+
 ## What Is In This Repo
 
 - `process_dataset.py`: downloads `JailbreakBench/JBB-Behaviors`, creates harmful/benign prompt rows, and transliterates them.

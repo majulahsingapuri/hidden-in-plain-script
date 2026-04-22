@@ -27,6 +27,7 @@ from statsmodels.tools.sm_exceptions import (
 SUMMARY_LATE_LAYER_RANGE = tuple(range(15, 25))
 PRIMARY_FEATURE = "latin_share"
 SECONDARY_FEATURE = "non_latin_share"
+HEATMAP_COEF_CAP = 200.0
 
 
 def load_rq1_results(path: str | Path) -> pd.DataFrame:
@@ -79,9 +80,9 @@ def build_rq1_rq2_joined_frame(
     joined["refused"] = joined["refused"].astype(int)
     joined["harmful"] = joined["harmful"].astype(int)
     joined["gibberish"] = joined["gibberish"].astype(bool)
-    return joined.sort_values(["prompt_type", "variant", "prompt_id", "layer"]).reset_index(
-        drop=True
-    )
+    return joined.sort_values(
+        ["prompt_type", "variant", "prompt_id", "layer"]
+    ).reset_index(drop=True)
 
 
 def build_joined_qa_table(
@@ -89,16 +90,39 @@ def build_joined_qa_table(
     joined_df: pd.DataFrame,
 ) -> pd.DataFrame:
     """Summarize join integrity and non-gibberish counts."""
-    per_prompt_variant_layers = joined_df.groupby(["prompt_id", "variant"])["layer"].nunique()
+    per_prompt_variant_layers = joined_df.groupby(["prompt_id", "variant"])[
+        "layer"
+    ].nunique()
     rows = [
         {"metric": "rq1_rows", "value": int(len(rq1_df))},
         {"metric": "non_gibberish_rows", "value": int((~rq1_df["gibberish"]).sum())},
         {"metric": "joined_rows", "value": int(len(joined_df))},
-        {"metric": "joined_prompt_variant_pairs", "value": int(joined_df.groupby(["prompt_id", "variant"]).ngroups)},
-        {"metric": "joined_layers_per_pair", "value": sorted(per_prompt_variant_layers.unique().tolist())},
-        {"metric": "non_gibberish_by_prompt_type", "value": joined_df[["prompt_id", "prompt_type", "variant"]].drop_duplicates()["prompt_type"].value_counts().to_dict()},
-        {"metric": "rows_by_variant", "value": joined_df[["prompt_id", "variant"]].drop_duplicates()["variant"].value_counts().to_dict()},
-        {"metric": "duplicate_prompt_variant_layer_rows", "value": int(joined_df.duplicated(["prompt_id", "variant", "layer"]).sum())},
+        {
+            "metric": "joined_prompt_variant_pairs",
+            "value": int(joined_df.groupby(["prompt_id", "variant"]).ngroups),
+        },
+        {
+            "metric": "joined_layers_per_pair",
+            "value": sorted(per_prompt_variant_layers.unique().tolist()),
+        },
+        {
+            "metric": "non_gibberish_by_prompt_type",
+            "value": joined_df[["prompt_id", "prompt_type", "variant"]]
+            .drop_duplicates()["prompt_type"]
+            .value_counts()
+            .to_dict(),
+        },
+        {
+            "metric": "rows_by_variant",
+            "value": joined_df[["prompt_id", "variant"]]
+            .drop_duplicates()["variant"]
+            .value_counts()
+            .to_dict(),
+        },
+        {
+            "metric": "duplicate_prompt_variant_layer_rows",
+            "value": int(joined_df.duplicated(["prompt_id", "variant", "layer"]).sum()),
+        },
     ]
     return pd.DataFrame(rows)
 
@@ -196,7 +220,9 @@ def run_variant_outcome_layer_tests(
             }
         )
     results = pd.DataFrame(rows).sort_values(["variant", "layer"], ignore_index=True)
-    return _apply_fdr_by_family(results, ["analysis_scope", "prompt_type", "outcome", "variant"])
+    return _apply_fdr_by_family(
+        results, ["analysis_scope", "prompt_type", "outcome", "variant"]
+    )
 
 
 def run_pooled_adjusted_layer_tests(
@@ -255,14 +281,13 @@ def _build_summary_feature_frame(
     df_joined: pd.DataFrame,
     feature_column: str = PRIMARY_FEATURE,
 ) -> pd.DataFrame:
-    subset = df_joined.loc[df_joined["included_in_inference"] & df_joined[feature_column].notna()].copy()
+    subset = df_joined.loc[
+        df_joined["included_in_inference"] & df_joined[feature_column].notna()
+    ].copy()
     group_cols = ["prompt_id", "variant", "prompt_type", "refused", "harmful"]
-    summary = (
-        subset.groupby(group_cols, as_index=False)
-        .agg(
-            latin_share_mean_all=(feature_column, "mean"),
-            latin_share_max=(feature_column, "max"),
-        )
+    summary = subset.groupby(group_cols, as_index=False).agg(
+        latin_share_mean_all=(feature_column, "mean"),
+        latin_share_max=(feature_column, "max"),
     )
     late = (
         subset.loc[subset["layer"].isin(SUMMARY_LATE_LAYER_RANGE)]
@@ -278,9 +303,8 @@ def _build_summary_feature_frame(
         .loc[:, ["prompt_id", "variant", "layer"]]
         .rename(columns={"layer": "latin_share_argmax_layer"})
     )
-    return (
-        summary.merge(late, on=group_cols, how="left")
-        .merge(argmax, on=["prompt_id", "variant"], how="left")
+    return summary.merge(late, on=group_cols, how="left").merge(
+        argmax, on=["prompt_id", "variant"], how="left"
     )
 
 
@@ -334,7 +358,9 @@ def run_prediction_baselines(
     outcomes: tuple[str, ...] = ("refused", "harmful"),
 ) -> pd.DataFrame:
     """Train lightweight pooled predictive baselines using all layer shares."""
-    subset = df_joined.loc[df_joined["included_in_inference"] & df_joined[PRIMARY_FEATURE].notna()].copy()
+    subset = df_joined.loc[
+        df_joined["included_in_inference"] & df_joined[PRIMARY_FEATURE].notna()
+    ].copy()
     wide = (
         subset.pivot_table(
             index=["prompt_id", "variant", "prompt_type", "refused", "harmful"],
@@ -369,7 +395,9 @@ def run_prediction_baselines(
                     solver="liblinear",
                     max_iter=1000,
                 )
-                proba = cross_val_predict(model, X, y, cv=cv, method="predict_proba")[:, 1]
+                proba = cross_val_predict(model, X, y, cv=cv, method="predict_proba")[
+                    :, 1
+                ]
                 auroc = float(roc_auc_score(y, proba))
                 average_precision = float(average_precision_score(y, proba))
             rows.append(
@@ -410,8 +438,16 @@ def summarize_joined_significant_layers(
                 "variant": variant,
                 "n_significant_layers": len(significant_layers),
                 "significant_layers": significant_layers,
-                "min_q_value": float(frame["q_value"].min()) if frame["q_value"].notna().any() else np.nan,
-                "max_abs_coef": float(frame["coef"].abs().max()) if frame["coef"].notna().any() else np.nan,
+                "min_q_value": (
+                    float(frame["q_value"].min())
+                    if frame["q_value"].notna().any()
+                    else np.nan
+                ),
+                "max_abs_coef": (
+                    float(frame["coef"].abs().max())
+                    if frame["coef"].notna().any()
+                    else np.nan
+                ),
             }
         )
     return pd.DataFrame(rows).sort_values(
@@ -427,24 +463,48 @@ def plot_variant_outcome_heatmap(
     outcome: str,
     value: str = "coef",
     height: int = 900,
+    coef_cap: float = HEATMAP_COEF_CAP,
 ):
     """Plot a variant-by-layer heatmap for one prompt type and one outcome."""
     plot_df = df_variant_tests.loc[
         (df_variant_tests["prompt_type"] == prompt_type)
         & (df_variant_tests["outcome"] == outcome)
     ].copy()
+    color_kwargs: dict[str, float] = {}
+    color_label = value
+    title_suffix = value
     if value == "-log10_q":
         safe_q = plot_df["q_value"].clip(lower=np.finfo(float).tiny)
         plot_df["-log10_q"] = -np.log10(safe_q)
+        global_safe_q = df_variant_tests["q_value"].clip(lower=np.finfo(float).tiny)
+        global_max = (
+            float(np.nanmax(-np.log10(global_safe_q))) if len(global_safe_q) else 0.0
+        )
+        color_kwargs["zmin"] = 0.0
+        color_kwargs["zmax"] = max(1.0, float(np.ceil(global_max * 10) / 10))
+        color_label = "-log10(q-value)"
+        title_suffix = "-log10(q-value)"
         value = "-log10_q"
+    elif value == "coef":
+        global_max = (
+            float(df_variant_tests["coef"].abs().max())
+            if df_variant_tests["coef"].notna().any()
+            else 0.0
+        )
+        bound = max(1e-9, min(float(np.ceil(global_max * 10) / 10), float(coef_cap)))
+        color_kwargs.update(
+            {"zmin": -bound, "zmax": bound, "color_continuous_midpoint": 0.0}
+        )
+        color_label = "Log-odds coefficient"
     heatmap = plot_df.pivot(index="variant", columns="layer", values=value)
     fig = px.imshow(
         heatmap,
         aspect="auto",
         color_continuous_scale="RdBu_r" if value == "coef" else "Viridis",
-        labels={"x": "Layer", "y": "Variant", "color": value},
-        title=f"{prompt_type.title()} prompts, outcome={outcome}: variant-by-layer {value}",
+        labels={"x": "Layer", "y": "Variant", "color": color_label},
+        title=f"{prompt_type.title()} prompts, outcome={outcome}: variant-by-layer {title_suffix}",
         height=height,
+        **color_kwargs,
     )
     return fig
 
@@ -469,7 +529,11 @@ def plot_pooled_adjusted_coefficients(
         color="significance_label",
         markers=True,
         title=f"{prompt_type.title()} prompts, outcome={outcome}: pooled adjusted coefficients",
-        labels={"coef": "Log-odds coefficient", "layer": "Layer", "significance_label": "Significance"},
+        labels={
+            "coef": "Log-odds coefficient",
+            "layer": "Layer",
+            "significance_label": "Significance",
+        },
         height=height,
     )
     fig.add_hline(y=0, line_dash="dash", line_color="black")
@@ -503,13 +567,17 @@ def format_joined_findings_text(
                 & (variant_summary["n_significant_layers"] > 0)
             ]
             if top_variants.empty:
-                lines.append(f"{prompt_type}/{outcome}: no variant-specific significant layers.")
+                lines.append(
+                    f"{prompt_type}/{outcome}: no variant-specific significant layers."
+                )
             else:
                 parts = [
                     f"{row.variant}: {', '.join(map(str, row.significant_layers))}"
                     for row in top_variants.itertuples()
                 ]
-                lines.append(f"{prompt_type}/{outcome}: variant-specific layers = {'; '.join(parts)}")
+                lines.append(
+                    f"{prompt_type}/{outcome}: variant-specific layers = {'; '.join(parts)}"
+                )
             pred = prediction_df.loc[
                 (prediction_df["prompt_type"] == prompt_type)
                 & (prediction_df["outcome"] == outcome)

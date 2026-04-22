@@ -7,6 +7,7 @@ import pandas as pd
 from rq1_rq2_stats import (
     build_outcome_prevalence_table,
     build_rq1_rq2_joined_frame,
+    plot_variant_outcome_heatmap,
     run_pooled_adjusted_layer_tests,
     run_prediction_baselines,
     run_summary_feature_models,
@@ -104,6 +105,64 @@ class JoinedAnalysisTests(unittest.TestCase):
         self.assertEqual(result.shape[0], 4)
         self.assertTrue((result["n_features"] > 0).all())
         self.assertTrue((result["n_splits"] >= 2).all())
+
+    def test_variant_heatmap_uses_shared_symmetric_coef_scale(self):
+        tests_df = pd.DataFrame(
+            [
+                {"prompt_type": "harmful", "outcome": "refused", "variant": "en", "layer": 0, "coef": -0.3, "q_value": 0.2},
+                {"prompt_type": "harmful", "outcome": "refused", "variant": "hi", "layer": 0, "coef": 0.1, "q_value": 0.03},
+                {"prompt_type": "benign", "outcome": "refused", "variant": "en", "layer": 0, "coef": 1.8, "q_value": 0.5},
+            ]
+        )
+        fig = plot_variant_outcome_heatmap(
+            tests_df,
+            prompt_type="harmful",
+            outcome="refused",
+            value="coef",
+            height=300,
+        )
+        self.assertEqual(fig.layout.coloraxis.cmin, -1.8)
+        self.assertEqual(fig.layout.coloraxis.cmax, 1.8)
+        self.assertEqual(fig.layout.coloraxis.cmid, 0.0)
+
+    def test_variant_heatmap_clips_extreme_coef_outliers_by_default(self):
+        tests_df = pd.DataFrame(
+            [
+                {"prompt_type": "harmful", "outcome": "refused", "variant": "en", "layer": 0, "coef": -35.0, "q_value": 0.2},
+                {"prompt_type": "harmful", "outcome": "refused", "variant": "hi", "layer": 0, "coef": 120.0, "q_value": 0.03},
+                {"prompt_type": "benign", "outcome": "refused", "variant": "en", "layer": 0, "coef": 2400.0, "q_value": 0.5},
+            ]
+        )
+        fig = plot_variant_outcome_heatmap(
+            tests_df,
+            prompt_type="harmful",
+            outcome="refused",
+            value="coef",
+            height=300,
+        )
+        self.assertEqual(fig.layout.coloraxis.cmin, -200.0)
+        self.assertEqual(fig.layout.coloraxis.cmax, 200.0)
+        self.assertEqual(fig.layout.coloraxis.cmid, 0.0)
+        self.assertIn("clipped to +/-200", fig.layout.title.text)
+
+    def test_variant_heatmap_uses_shared_significance_scale(self):
+        tests_df = pd.DataFrame(
+            [
+                {"prompt_type": "harmful", "outcome": "refused", "variant": "en", "layer": 0, "coef": -0.3, "q_value": 0.2},
+                {"prompt_type": "harmful", "outcome": "refused", "variant": "hi", "layer": 0, "coef": 0.1, "q_value": 0.03},
+                {"prompt_type": "benign", "outcome": "refused", "variant": "en", "layer": 0, "coef": 1.8, "q_value": 0.001},
+            ]
+        )
+        fig = plot_variant_outcome_heatmap(
+            tests_df,
+            prompt_type="harmful",
+            outcome="refused",
+            value="-log10_q",
+            height=300,
+        )
+        self.assertEqual(fig.layout.coloraxis.cmin, 0.0)
+        self.assertEqual(fig.layout.coloraxis.cmax, 3.0)
+        self.assertIn("q=0.05", fig.layout.title.text)
 
 
 if __name__ == "__main__":

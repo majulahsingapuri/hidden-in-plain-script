@@ -7,6 +7,7 @@ import pandas as pd
 
 from rq2_stats import (
     build_script_proportions,
+    plot_variant_heatmap,
     run_pooled_layer_tests,
     run_variant_layer_tests,
 )
@@ -116,6 +117,32 @@ class InferenceTests(unittest.TestCase):
         self.assertTrue(result["q_value"].notna().all())
         self.assertTrue((result["n_harmful"] == 2).all())
         self.assertTrue((result["n_benign"] == 2).all())
+
+    def test_variant_heatmap_uses_shared_symmetric_mean_diff_scale(self):
+        tests_df = pd.DataFrame(
+            [
+                {"variant": "en", "layer": 0, "mean_diff": -0.2, "q_value": 0.4},
+                {"variant": "hi", "layer": 0, "mean_diff": 0.5, "q_value": 0.02},
+                {"variant": "ta", "layer": 0, "mean_diff": 1.2, "q_value": 0.8},
+            ]
+        )
+        fig = plot_variant_heatmap(tests_df, value="mean_diff", height=300)
+        self.assertEqual(fig.layout.coloraxis.cmin, -1.2)
+        self.assertEqual(fig.layout.coloraxis.cmax, 1.2)
+        self.assertEqual(fig.layout.coloraxis.cmid, 0.0)
+
+    def test_variant_heatmap_uses_shared_significance_scale(self):
+        tests_df = pd.DataFrame(
+            [
+                {"variant": "en", "layer": 0, "mean_diff": -0.2, "q_value": 0.4},
+                {"variant": "hi", "layer": 0, "mean_diff": 0.5, "q_value": 0.02},
+                {"variant": "ta", "layer": 0, "mean_diff": 1.2, "q_value": 0.001},
+            ]
+        )
+        fig = plot_variant_heatmap(tests_df, value="-log10_q", height=300)
+        self.assertEqual(fig.layout.coloraxis.cmin, 0.0)
+        self.assertEqual(fig.layout.coloraxis.cmax, 3.0)
+        self.assertIn("q=0.01", fig.layout.title.text)
 
 
 if __name__ == "__main__":

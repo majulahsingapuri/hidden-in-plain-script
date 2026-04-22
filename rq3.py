@@ -9,6 +9,7 @@ import argparse
 import json
 from tqdm import tqdm
 from pathlib import Path
+from typing import Any
 
 from nnsight import LanguageModel
 from sae_lens import SAE
@@ -43,13 +44,36 @@ def load_sae(
     return sae
 
 
+def get_tokenizer(model: LanguageModel) -> Any:
+    """Return the tokenizer attached to a traced language model."""
+
+    tokenizer = getattr(model, "tokenizer", None) or getattr(model, "_tokenizer", None)
+    if tokenizer is None:
+        raise AttributeError("LanguageModel does not expose a tokenizer.")
+    return tokenizer
+
+
+def tokenize_prompt(model: LanguageModel, prompt: str) -> tuple[list[int], list[str]]:
+    """Tokenize a prompt into token IDs and decoded token strings."""
+
+    tokenizer = get_tokenizer(model)
+    encoded = tokenizer(prompt, return_tensors="pt", add_special_tokens=True)
+    token_ids_tensor = encoded["input_ids"][0].detach().cpu()
+    token_ids = [int(token_id) for token_id in token_ids_tensor.tolist()]
+    if hasattr(tokenizer, "convert_ids_to_tokens"):
+        tokens = [str(token) for token in tokenizer.convert_ids_to_tokens(token_ids)]
+    else:
+        tokens = [str(tokenizer.decode([token_id])) for token_id in token_ids]
+    return token_ids, tokens
+
+
 def extract_hidden_states(
     model: LanguageModel,
     prompt: str,
     target_layer: int,
     layers_path: str,
     norm_path: str,
-) -> tuple[list[str], torch.Tensor]:
+) -> torch.Tensor:
     """Trace one prompt and return hidden states from the selected layer."""
 
     layers = resolve_attr_path(model, layers_path)
@@ -71,7 +95,7 @@ def decompose_features(sae: SAE, hidden_states: torch.Tensor) -> torch.Tensor:
     return feature_acts.squeeze(0)
 
 
-def sae_features(
+def sae_token_features(
     model: LanguageModel,
     prompt_text,
     sae: SAE,
@@ -79,11 +103,7 @@ def sae_features(
     layers_path: str,
     norm_path: str,
 ) -> torch.Tensor:
-    """Return one mean-pooled SAE feature vector for a prompt.
-
-    The traced hidden states are encoded with the SAE and then averaged across
-    token positions so downstream classifiers can consume a single vector.
-    """
+    """Return per-token SAE feature activations for a prompt."""
 
     hidden_states = extract_hidden_states(
         model,
@@ -92,9 +112,13 @@ def sae_features(
         layers_path,
         norm_path,
     )
-    acts = decompose_features(sae, hidden_states)
-    # Mean-pool across token positions to get a single feature vector per prompt.
-    return acts.mean(dim=0)
+    return decompose_features(sae, hidden_states)
+
+
+def sae_features(token_acts: torch.Tensor) -> torch.Tensor:
+    """Mean-pool per-token SAE activations into one vector per prompt."""
+
+    return token_acts.mean(dim=0)
 
 
 def load_progress(output_path: Path) -> list[dict]:
@@ -141,6 +165,26 @@ def build_done_sets(
     return done_with_layer, done_no_layer
 
 
+def build_progress_index(
+    progress: list[dict],
+) -> tuple[dict[tuple[str, str, int], int], dict[tuple[str, str], int]]:
+    """Build index maps for progress rows keyed by prompt variant."""
+
+    index_with_layer = {}
+    index_no_layer = {}
+    for idx, entry in enumerate(progress):
+        prompt_id = entry.get("prompt_id")
+        variant = entry.get("variant")
+        if not prompt_id or not variant:
+            continue
+        layer = entry.get("target_layer")
+        if layer is None:
+            index_no_layer[(prompt_id, variant)] = idx
+        else:
+            index_with_layer[(prompt_id, variant, int(layer))] = idx
+    return index_with_layer, index_no_layer
+
+
 def save_activation(
     output_dir: Path,
     prompt_id: str,
@@ -157,6 +201,60 @@ def save_activation(
     return out_path
 
 
+def sparsify_token_activations(
+    token_acts: torch.Tensor, token_top_k: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Keep the top-k latents for each token position."""
+
+    if token_acts.dim() != 2:
+        raise ValueError(f"Expected token activations with shape [T, D], got {tuple(token_acts.shape)}")
+    k = max(1, min(int(token_top_k), int(token_acts.shape[1])))
+    values, indices = torch.topk(token_acts, k=k, dim=1)
+    return indices.detach().cpu(), values.detach().cpu()
+
+
+def save_token_activation(
+    output_dir: Path,
+    prompt_id: str,
+    variant: str,
+    target_layer: int,
+    prompt_text: str,
+    token_ids: list[int],
+    tokens: list[str],
+    token_acts: torch.Tensor,
+    token_top_k: int,
+) -> Path:
+    """Save sparse per-token latent activations and return the created path."""
+
+    if token_acts.dim() != 2:
+        raise ValueError(f"Expected token activations with shape [T, D], got {tuple(token_acts.shape)}")
+
+    seq_len = min(len(token_ids), len(tokens), int(token_acts.shape[0]))
+    token_ids = token_ids[:seq_len]
+    tokens = tokens[:seq_len]
+    token_acts = token_acts[:seq_len]
+    top_indices, top_values = sparsify_token_activations(token_acts, token_top_k)
+
+    payload = {
+        "prompt_id": prompt_id,
+        "variant": variant,
+        "target_layer": int(target_layer),
+        "prompt_text": prompt_text,
+        "token_ids": token_ids,
+        "tokens": tokens,
+        "top_latent_indices": top_indices,
+        "top_latent_values": top_values,
+        "token_top_k": int(top_indices.shape[1]),
+        "seq_len": int(seq_len),
+        "num_latents": int(token_acts.shape[1]),
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{prompt_id}-{variant}-{target_layer}.pt"
+    out_path = output_dir / filename
+    torch.save(payload, out_path)
+    return out_path
+
+
 def run_batch(
     data_path: Path,
     output_path: Path,
@@ -169,6 +267,9 @@ def run_batch(
     norm_path: str = "model.language_model.norm",
     fresh: bool = False,
     langs: list[str] = [],
+    save_token_activations: bool = False,
+    token_top_k: int = 256,
+    token_output_dir: Path | None = None,
 ):
     """Run SAE feature extraction over every requested prompt variant.
 
@@ -184,6 +285,9 @@ def run_batch(
         norm_path: Dotted path to the final norm module.
         fresh: Delete existing progress JSON before starting.
         langs: Target language codes used to construct prompt variants.
+        save_token_activations: Persist sparse token-level SAE activations.
+        token_top_k: Keep the top-k latents per token position.
+        token_output_dir: Optional output directory for token-level artifacts.
 
     Example:
         >>> # run_batch(Path("assets/transliterations.json"), Path("assets/gemma-3-4b-it/sae_features.json"), "google/gemma-3-4b-it", "gemma-scope-2-4b-it-res-all", "layer_17_width_262k_l0_small")
@@ -197,6 +301,7 @@ def run_batch(
 
     progress = load_progress(output_path)
     done_with_layer, done_no_layer = build_done_sets(progress)
+    progress_index_with_layer, progress_index_no_layer = build_progress_index(progress)
 
     with open(data_path, "r", encoding="utf-8") as f:
         prompts = json.load(f)
@@ -216,14 +321,25 @@ def run_batch(
             if postfix:
                 variants_bar.set_postfix(postfix, refresh=False)
             prompt_id = prompt_entry["prompt_id"]
-            if (prompt_id, variant, target_layer) in done_with_layer or (
-                prompt_id,
-                variant,
-            ) in done_no_layer:
+            existing_idx = progress_index_with_layer.get(
+                (prompt_id, variant, target_layer)
+            )
+            if existing_idx is None:
+                existing_idx = progress_index_no_layer.get((prompt_id, variant))
+            existing_entry = progress[existing_idx] if existing_idx is not None else None
+
+            has_existing_activation = bool(existing_entry and existing_entry.get("activation_path"))
+            has_existing_token_activation = bool(
+                existing_entry and existing_entry.get("token_activation_path")
+            )
+
+            if has_existing_activation and (
+                not save_token_activations or has_existing_token_activation
+            ):
                 continue
 
             prompt_text = prompt_entry[variant]
-            activations = sae_features(
+            token_acts = sae_token_features(
                 model,
                 prompt_text,
                 sae,
@@ -231,6 +347,7 @@ def run_batch(
                 layers_path,
                 norm_path,
             )
+            activations = sae_features(token_acts)
 
             activation_path = save_activation(
                 output_path.parent / "sae_activations",
@@ -240,14 +357,40 @@ def run_batch(
                 activations,
             )
 
-            result = {
-                "prompt_id": prompt_id,
-                "variant": variant,
-                "target_layer": target_layer,
-                "activation_path": str(activation_path),
-            }
+            result = dict(existing_entry) if existing_entry else {}
+            token_activation_path = None
+            if save_token_activations:
+                token_ids, tokens = tokenize_prompt(model, prompt_text)
+                token_activation_path = save_token_activation(
+                    token_output_dir or (output_path.parent / "sae_token_activations"),
+                    prompt_id,
+                    variant,
+                    target_layer,
+                    prompt_text,
+                    token_ids,
+                    tokens,
+                    token_acts,
+                    token_top_k,
+                )
 
-            progress.append(result)
+            result.update(
+                {
+                    "prompt_id": prompt_id,
+                    "variant": variant,
+                    "target_layer": target_layer,
+                    "activation_path": str(activation_path),
+                }
+            )
+            if token_activation_path is not None:
+                result["token_activation_path"] = str(token_activation_path)
+                result["token_top_k"] = int(token_top_k)
+
+            if existing_idx is None:
+                progress.append(result)
+                new_idx = len(progress) - 1
+                progress_index_with_layer[(prompt_id, variant, target_layer)] = new_idx
+            else:
+                progress[existing_idx] = result
             save_progress(output_path, progress)
 
     monitor.close()
@@ -327,6 +470,23 @@ def main():
         default=["gu", "hi", "ta", "te"],
         help="Target language codes (e.g., gu te).",
     )
+    parser.add_argument(
+        "--save-token-activations",
+        action="store_true",
+        help="Also save sparse token-level SAE activations for later highlighting.",
+    )
+    parser.add_argument(
+        "--token-top-k",
+        type=int,
+        default=256,
+        help="Top-k SAE latents to keep per token when saving token activations.",
+    )
+    parser.add_argument(
+        "--token-output-dir",
+        type=Path,
+        default=None,
+        help="Optional output directory for sparse token-level SAE activations.",
+    )
     args = parser.parse_args()
     run_batch(
         args.data,
@@ -340,6 +500,9 @@ def main():
         args.norm_path,
         args.fresh,
         args.langs,
+        args.save_token_activations,
+        args.token_top_k,
+        args.token_output_dir,
     )
 
 

@@ -432,7 +432,9 @@ def plot_script_proportions(
     """Replicate the notebook's descriptive script-proportion line chart."""
     if groupby is None:
         groupby = ["prompt_type", "layer", "variant", "script"]
-    df_mean = df_props.groupby(groupby, as_index=False).agg(proportion=("proportion", "mean"))
+    df_mean = df_props.groupby(groupby, as_index=False).agg(
+        proportion=("proportion", "mean")
+    )
     fig = px.line(
         df_mean,
         x="layer",
@@ -492,18 +494,41 @@ def plot_variant_heatmap(
 ):
     """Plot a variant-by-layer heatmap for effect size or significance strength."""
     plot_df = df_variant_tests.copy()
+    color_kwargs: dict[str, float] = {}
+    color_label = value
+    title_suffix = value
     if value == "-log10_q":
         safe_q = plot_df["q_value"].clip(lower=np.finfo(float).tiny)
         plot_df["-log10_q"] = -np.log10(safe_q)
+        global_safe_q = df_variant_tests["q_value"].clip(lower=np.finfo(float).tiny)
+        global_max = (
+            float(np.nanmax(-np.log10(global_safe_q))) if len(global_safe_q) else 0.0
+        )
+        color_kwargs["zmin"] = 0.0
+        color_kwargs["zmax"] = max(1.0, float(np.ceil(global_max * 10) / 10))
+        color_label = "-log10(q-value)"
+        title_suffix = "-log10(q-value)"
         value = "-log10_q"
+    elif value == "mean_diff":
+        global_max = (
+            float(df_variant_tests["mean_diff"].abs().max())
+            if df_variant_tests["mean_diff"].notna().any()
+            else 0.0
+        )
+        bound = max(1e-9, float(np.ceil(global_max * 10) / 10))
+        color_kwargs.update(
+            {"zmin": -bound, "zmax": bound, "color_continuous_midpoint": 0.0}
+        )
+        color_label = "Mean difference"
     heatmap = plot_df.pivot(index="variant", columns="layer", values=value)
     fig = px.imshow(
         heatmap,
         aspect="auto",
         color_continuous_scale="RdBu_r" if value == "mean_diff" else "Viridis",
-        labels={"x": "Layer", "y": "Variant", "color": value},
-        title=f"Variant by Layer Heatmap: {value}",
+        labels={"x": "Layer", "y": "Variant", "color": color_label},
+        title=f"Variant by Layer Heatmap: {title_suffix}",
         height=height,
+        **color_kwargs,
     )
     return fig
 
@@ -518,9 +543,8 @@ def format_findings_text(
         pooled_text = "No pooled analysis results available."
     else:
         pooled_layers = pooled_row.iloc[0]["significant_layers"]
-        pooled_text = (
-            "Pooled across variants, significant layers after FDR: "
-            + (", ".join(map(str, pooled_layers)) if pooled_layers else "none")
+        pooled_text = "Pooled across variants, significant layers after FDR: " + (
+            ", ".join(map(str, pooled_layers)) if pooled_layers else "none"
         )
 
     variant_hits = variant_summary.loc[variant_summary["n_significant_layers"] > 0]
